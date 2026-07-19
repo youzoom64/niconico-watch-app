@@ -8193,10 +8193,14 @@ class TimeshiftLocalFilesTab(QWidget):
             f"開始={selected_steps[0]} / スキップ="
             + ",".join(step for step in self.archive_step_names if step not in selected_steps)
         )
+        run_preprocessing = any(
+            step in selected_steps
+            for step in {"step01_data_collector", "step02_audio_transcriber"}
+        )
         self.active_job = TimeshiftFinalizeJob(
             groups,
             legacy_steps=selected_steps,
-            run_preprocessing=True,
+            run_preprocessing=run_preprocessing,
         )
         self.active_job.signals.progress.connect(self.append_status)
         self.active_job.signals.detail.connect(self.append_detail_status)
