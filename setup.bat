@@ -20,7 +20,7 @@ if exist "%FFMPEG_ROOT%" for /r "%FFMPEG_ROOT%" %%F in (ffmpeg.exe) do if not de
 if not defined FFMPEG_EXE (
   if not exist "%~dp0tools" mkdir "%~dp0tools"
   echo Downloading FFmpeg...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri '%FFMPEG_URL%' -OutFile '%FFMPEG_ZIP%'"
+  curl.exe -L --fail --retry 3 --output "%FFMPEG_ZIP%" "%FFMPEG_URL%" >> "%SETUP_LOG%" 2>&1
   if errorlevel 1 goto :error
   echo Extracting FFmpeg...
   if not exist "%FFMPEG_ROOT%" mkdir "%FFMPEG_ROOT%"

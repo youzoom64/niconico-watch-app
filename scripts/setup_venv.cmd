@@ -16,7 +16,7 @@ if not exist "%PY_EXE%" (
   echo [niconico-watch-app] Downloading project-local Python %PY_VER%...
   if not exist "%CD%\tools" mkdir "%CD%\tools"
   if not exist "%PY_DIR%" mkdir "%PY_DIR%"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri '%PY_URL%' -OutFile '%PY_ZIP%'"
+  curl.exe -L --fail --retry 3 --output "%PY_ZIP%" "%PY_URL%"
   if errorlevel 1 goto :error
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%PY_ZIP%' -DestinationPath '%PY_DIR%' -Force"
   if errorlevel 1 goto :error
@@ -28,7 +28,7 @@ for %%F in ("%PY_DIR%\python*._pth") do powershell -NoProfile -ExecutionPolicy B
 "%PY_EXE%" -m pip --version >nul 2>nul
 if errorlevel 1 (
   echo [niconico-watch-app] Installing pip...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri '%GET_PIP_URL%' -OutFile '%GET_PIP%'"
+  curl.exe -L --fail --retry 3 --output "%GET_PIP%" "%GET_PIP_URL%"
   if errorlevel 1 goto :error
   "%PY_EXE%" "%GET_PIP%" --no-warn-script-location
   if errorlevel 1 goto :error
