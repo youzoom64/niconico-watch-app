@@ -1,0 +1,3 @@
+# NDGRClient currently requires protobuf>=6.
+# google-generativeai releases may pin protobuf<5, so keep this out of the core runtime.
+google-generativeai

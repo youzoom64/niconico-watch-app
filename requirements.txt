@@ -1,0 +1,20 @@
+PyQt6
+requests
+beautifulsoup4
+selenium
+websockets
+ndgr-client @ git+https://github.com/tsukumijima/NDGRClient
+faster-whisper
+whisperx
+pyannote.audio
+huggingface_hub
+ctranslate2
+omegaconf
+torch
+transformers
+Janome
+openai
+moviepy==1.0.3
+pydub
+numpy
+pillow
