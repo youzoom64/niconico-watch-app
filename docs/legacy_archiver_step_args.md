@@ -46,7 +46,7 @@ broadcast_dir = account_dir / lv_value
 現在の新アプリの保存先:
 
 ```text
-F:\Niconico\target\platform\niconico\{account_id}\bloadcast\{lv_value}
+<target_root>\platform\niconico\{account_id}\broadcast\{lv_value}
 ```
 
 とは `bloadcast` 階層が違う。
@@ -57,7 +57,7 @@ F:\Niconico\target\platform\niconico\{account_id}\bloadcast\{lv_value}
 
 ```text
 platform = niconico
-platform_directory = F:\Niconico\target\platform\niconico
+platform_directory = <target_root>\platform\niconico
 account_id = 51610839 など
 ```
 
@@ -73,7 +73,7 @@ account_dir / lv_value
 は実際には:
 
 ```text
-F:\Niconico\target\platform\niconico\{account_id}\bloadcast\{lv_value}
+<target_root>\platform\niconico\{account_id}\broadcast\{lv_value}
 ```
 
 になる。

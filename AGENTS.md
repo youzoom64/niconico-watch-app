@@ -10,8 +10,8 @@
 
 - 介入APIは監視アプリ機能の一部。起動cmdが親として一緒に起動する。
 - 起動cmd上のGUIプロセス終了後に介入APIも停止する。
-- GUI起動: `J:\utility\Niconico\niconico-watch-app\scripts\start_gui.cmd`
-- API単体起動: `J:\utility\Niconico\niconico-watch-app\scripts\start_intervention_api.cmd`
+- GUI起動: `scripts\start_gui.cmd`
+- API単体起動: `scripts\start_intervention_api.cmd`
 - URL: `http://127.0.0.1:8794`
 - DB操作は直接SQLiteを書かず、原則このAPIを通す。
 - 疎通確認: `GET /health`
