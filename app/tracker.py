@@ -4174,6 +4174,11 @@ def backfill_broadcast_archive_meta(limit: int = 20) -> list[dict[str, Any]]:
 
 def slnico_storage_root(config: Config | None = None) -> Path:
     config_path = DEFAULT_SLNICO_CONFIG
+    if config is None:
+        try:
+            config = load_config()
+        except Exception:
+            config = None
     if config is not None:
         configured_exe = Path(str(config.slnico_live_rec_exe or ""))
         configured_path = configured_exe.parent / "SlNicoLiveRec_config.json"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import tracker
 
@@ -34,3 +35,20 @@ def test_apply_recommended_slnico_settings_preserves_credentials(tmp_path):
     assert saved["FilenameFormat"] == "{id}_{year}_{month}{day}_{hour}{minute}{second}_{title}"
     assert saved["FolderFormat"] == "{supplier_id}_{author}"
     assert saved["Login"] == 2
+
+
+def test_slnico_storage_root_loads_current_config_when_argument_is_omitted(
+    tmp_path, monkeypatch
+):
+    recorder_dir = tmp_path / "SlNicoLiveRec1082"
+    recorder_dir.mkdir()
+    exe = recorder_dir / "SlNicoLiveRec.exe"
+    exe.write_bytes(b"exe")
+    (recorder_dir / "SlNicoLiveRec_config.json").write_text(
+        json.dumps({"StorageLocation": "rec_file\\"}),
+        encoding="utf-8",
+    )
+    config = SimpleNamespace(slnico_live_rec_exe=str(exe))
+    monkeypatch.setattr(tracker, "load_config", lambda: config)
+
+    assert tracker.slnico_storage_root() == recorder_dir / "rec_file"
