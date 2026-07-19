@@ -5,6 +5,9 @@ cd /d "%~dp0"
 
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+echo Checking the latest SlNicoLiveRec...
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update_slnico.ps1"
+if errorlevel 1 echo [WARN] SlNicoLiveRec update check failed. Starting the app anyway.
 set "FFMPEG_EXE="
 if exist "%~dp0tools\ffmpeg" for /r "%~dp0tools\ffmpeg" %%F in (ffmpeg.exe) do if not defined FFMPEG_EXE set "FFMPEG_EXE=%%F"
 
