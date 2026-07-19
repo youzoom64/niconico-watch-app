@@ -22,10 +22,11 @@
 ### 必須
 
 - Windows 10または11
-- Python 3.11
-- FFmpeg / FFprobe
+- インターネット接続（初回セットアップ時）
 
-Pythonをインストールするときは、インストーラーの「Add Python to PATH」にチェックを入れてください。
+Python、FFmpeg、FFprobeを事前にインストールする必要はありません。`setup.bat`がPython 3.11をプロジェクト内の`tools\python311`へ取得し、専用の`.venv`を作成します。FFmpeg一式もプロジェクト内へ自動取得します。
+
+既に別のPythonや共通venvが入っていても使用しません。配布先のPCにPythonが一切入っていない状態からセットアップできます。
 
 ### 録画する場合（必須）
 
