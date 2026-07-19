@@ -17,6 +17,8 @@ if errorlevel 1 goto :error
 echo [2/3] Checking FFmpeg...
 set "FFMPEG_EXE="
 if exist "%FFMPEG_ROOT%" for /r "%FFMPEG_ROOT%" %%F in (ffmpeg.exe) do if not defined FFMPEG_EXE set "FFMPEG_EXE=%%F"
+for /d %%D in ("%~dp0..\SlNicoLiveRec*") do if exist "%%~fD\binary\ffmpeg.exe" set "FFMPEG_EXE=%%~fD\binary\ffmpeg.exe"
+if defined FFMPEG_EXE echo Reusing FFmpeg: %FFMPEG_EXE%
 if not defined FFMPEG_EXE (
   if not exist "%~dp0tools" mkdir "%~dp0tools"
   echo Downloading FFmpeg...
