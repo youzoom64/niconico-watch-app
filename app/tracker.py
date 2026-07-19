@@ -4191,6 +4191,59 @@ def slnico_storage_root(config: Config | None = None) -> Path:
         return default_root
 
 
+SLNICO_RECOMMENDED_SETTINGS: dict[str, Any] = {
+    "PurgeCredentials": False,
+    "Login": 2,
+    "ConvertFormat": True,
+    "DeleteOriginal": True,
+    "ToTrash": True,
+    "ConvertOptions": "-c:v copy -c:a copy",
+    "ChangeFilenameFormat": True,
+    "FilenameFormat": "{id}_{year}_{month}{day}_{hour}{minute}{second}_{title}",
+    "ChangeFolderFormat": True,
+    "FolderFormat": "{supplier_id}_{author}",
+    "TitleBarFormat": "{author} - SlNicoLiveRec",
+    "ReconnectionAttempt": False,
+    "RetryInterval": 10,
+    "RetryLimit": 0,
+    "WaitUntilBegin": False,
+    "WaitUntilBeginSecond": 60,
+    "CloseWindowOnExit": True,
+    "DebugMode": False,
+}
+
+
+def apply_recommended_slnico_settings(exe_path: str | Path) -> Path:
+    """Apply recorder defaults without replacing credentials or unknown settings."""
+    exe = Path(str(exe_path or "").strip()).expanduser()
+    if not exe.is_file():
+        raise FileNotFoundError(f"SlNicoLiveRec.exeが見つかりません: {exe}")
+    config_path = exe.parent / "SlNicoLiveRec_config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"設定ファイルが見つかりません。SlNicoLiveRecを一度起動して終了してください: {config_path}"
+        )
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"SlNicoLiveRec設定の読込に失敗しました: {config_path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"SlNicoLiveRec設定の形式が不正です: {config_path}")
+    raw.update(SLNICO_RECOMMENDED_SETTINGS)
+    temporary_path = config_path.with_suffix(config_path.suffix + ".tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(config_path)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            temporary_path.unlink()
+        raise RuntimeError(f"SlNicoLiveRec設定の保存に失敗しました: {config_path}: {exc}") from exc
+    return config_path
+
+
 def find_recording_segment_files(lv: str, *, storage_root: Path | None = None) -> list[Path]:
     storage_root = storage_root or slnico_storage_root()
     if not storage_root.exists():

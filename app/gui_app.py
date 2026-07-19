@@ -5432,6 +5432,11 @@ class SettingsTab(QWidget):
         self.recorder_path.setPlaceholderText("SlNicoLiveRec.exe")
         self.recorder_browse_button = QPushButton("参照")
         self.recorder_browse_button.clicked.connect(self.browse_recorder_path)
+        self.apply_recorder_settings_button = QPushButton("推奨設定を適用")
+        self.apply_recorder_settings_button.setToolTip(
+            "ログイン情報を保持したまま、命名・MP4変換・自動終了設定を適用します"
+        )
+        self.apply_recorder_settings_button.clicked.connect(self.apply_recorder_settings)
         self.tracker_fetch_method = NoWheelComboBox()
         self.tracker_fetch_method.addItem("Seleniumで取得", "selenium")
         self.tracker_fetch_method.addItem("公式APIで取得", "api")
@@ -5603,6 +5608,7 @@ class SettingsTab(QWidget):
         recorder_path_layout.setContentsMargins(0, 0, 0, 0)
         recorder_path_layout.addWidget(self.recorder_path, 1)
         recorder_path_layout.addWidget(self.recorder_browse_button)
+        recorder_path_layout.addWidget(self.apply_recorder_settings_button)
         recorder_layout.addWidget(recorder_path_row)
         recorder_layout.addWidget(QLabel("トラッカー取得方式"))
         recorder_layout.addWidget(self.tracker_fetch_method)
@@ -5870,6 +5876,21 @@ class SettingsTab(QWidget):
         )
         if path:
             self.recorder_path.setText(path)
+
+    def apply_recorder_settings(self) -> None:
+        try:
+            config_path = tracker.apply_recommended_slnico_settings(
+                self.recorder_path.text().strip()
+            )
+            self.status.setText(f"SlNicoLiveRec推奨設定を適用: {config_path}")
+            QMessageBox.information(
+                self,
+                "SlNicoLiveRec",
+                "推奨設定を適用しました。\nログイン情報は変更していません。",
+            )
+        except Exception as exc:
+            self.status.setText(f"SlNicoLiveRec設定適用失敗: {exc}")
+            QMessageBox.warning(self, "SlNicoLiveRec", str(exc))
 
     def toggle_session_visibility(self) -> None:
         if self.session_value.echoMode() == QLineEdit.EchoMode.Password:
