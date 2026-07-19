@@ -10571,7 +10571,7 @@ def load_config() -> Config:
         archive_upload_python_exe=str(
             raw.get(
                 "archive_upload_python_exe",
-                r"J:\system_tools\venvs\py310-common\Scripts\python.exe",
+                ROOT / ".venv" / "Scripts" / "python.exe",
             )
         ),
         archive_upload_cli_path=str(

@@ -22,6 +22,7 @@ ARCHIVE_DATA_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 TIMELINE_MARKERS = ('id="timeline2"', "id='timeline2'")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def process(pipeline_data):
@@ -83,7 +84,7 @@ def process(pipeline_data):
     python_exe = Path(
         str(
             settings.get("python_exe")
-            or r"J:\system_tools\venvs\py310-common\Scripts\python.exe"
+            or PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
         )
     )
     cli_path = Path(
@@ -400,7 +401,7 @@ def ensure_credentials_api(settings: dict) -> None:
     python_exe = Path(
         str(
             settings.get("credentials_api_python_exe")
-            or r"J:\system_tools\venvs\py310-common\Scripts\python.exe"
+            or PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
         )
     )
     workdir = Path(
