@@ -4,15 +4,20 @@ chcp 65001 >nul
 cd /d "%~dp0.."
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-set "PYTHON_BASE=J:\system_tools\python_bases\3.11.1\python.exe"
-
-if not exist "%PYTHON_BASE%" (
-  echo ERROR: Python 3.11 runtime not found: %PYTHON_BASE%
-  exit /b 1
-)
-
 echo [niconico-watch-app] creating .venv
-"%PYTHON_BASE%" -m venv .venv
+where py >nul 2>nul
+if not errorlevel 1 (
+  py -3.11 -m venv .venv
+) else (
+  where python >nul 2>nul
+  if errorlevel 1 (
+    echo ERROR: Python 3.11 is not installed.
+    echo Install Python 3.11 and enable "Add Python to PATH".
+    pause
+    exit /b 1
+  )
+  python -m venv .venv
+)
 if errorlevel 1 goto :error
 
 echo [niconico-watch-app] upgrading pip
