@@ -31,12 +31,44 @@ Pythonをインストールするときは、インストーラーの「Add Pyth
 
 放送を自動録画するには、別途`SlNicoLiveRec`をインストールする必要があります。このリポジトリには録画ソフト本体は含まれていません。
 
-1. SlNicoLiveRecをダウンロードして任意のフォルダーへ展開します。
+1. [SlNicoLiveRec配布ページ](https://guest-nico.github.io/pages/downloads.html)からSlNicoLiveRecをダウンロードし、任意のフォルダーへ展開します。
 2. SlNicoLiveRecを起動し、ニコニコへログインして録画できる状態にします。
 3. niconico-watch-appのメインGUIで「設定」を開きます。
 4. 「録画アプリ」の欄へ、SlNicoLiveRecの実行ファイルと録画保存先を設定します。
 
 既に保存済みのMP4/MKVからHTMLを作るだけなら、SlNicoLiveRecは不要です。
+
+#### SlNicoLiveRecの必須設定
+
+SlNicoLiveRecの「設定 → 上級者設定」を次のように設定します。
+
+| 項目 | 設定値 |
+|---|---|
+| ファイル名の書式を変更する | ON |
+| Filename | `{id}_{year}_{month}{day}_{hour}{minute}{second}_{title}` |
+| フォルダ名の書式を変更する | ON |
+| FolderName | `{supplier_id}_{author}` |
+| タイトルバー書式 | `{author} - SlNicoLiveRec` |
+| 録画停止後に再録画を試みる | OFF |
+| 再録画試行待機（秒） | `10` |
+| 試行上限 | `0` |
+| 開演待機・指定秒数まで待機する | OFF |
+| 秒前まで待機 | `60` |
+| 自動終了時にウィンドウを閉じる | ON |
+| Debug mode | OFF |
+
+「設定 → FFmpeg」は次のように設定します。
+
+| 項目 | 設定値 |
+|---|---|
+| 録画終了後にフォーマットをMP4に変換 | ON |
+| 変換後にオリジナルのTSファイルを削除 | ON |
+| TSファイル削除時にゴミ箱に移動 | ON |
+| 変換オプション | `-c:v copy -c:a copy` |
+
+「設定」タブのニコニコアカウント情報では、`user_sessionでログイン`を選択し、ニコニコへログイン済みのブラウザーから取得した`user_session`を入力します。取得方法は[SlNicoLiveRec設定・FAQ](https://nnn-revo2012.github.io/wiki/settings.html)を参照してください。
+
+`user_session`はログイン資格情報です。スクリーンショット、README、GitHub、チャットへ貼り付けないでください。
 
 ### GPUで文字起こしする場合
 
