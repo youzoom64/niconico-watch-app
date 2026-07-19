@@ -31,7 +31,7 @@ Pythonをインストールするときは、インストーラーの「Add Pyth
 
 放送を自動録画するには、別途`SlNicoLiveRec`をインストールする必要があります。このリポジトリには録画ソフト本体は含まれていません。
 
-1. [SlNicoLiveRec配布ページ](https://guest-nico.github.io/pages/downloads.html)からSlNicoLiveRecをダウンロードし、任意のフォルダーへ展開します。
+1. [SlNicoLiveRec配布元](https://person-of-ehomaki.blog.jp/)からSlNicoLiveRecをダウンロードし、任意のフォルダーへ展開します。
 2. SlNicoLiveRecを起動し、ニコニコへログインして録画できる状態にします。
 3. niconico-watch-appのメインGUIで「設定」を開きます。
 4. 「録画アプリ」の欄へ、SlNicoLiveRecの実行ファイルと録画保存先を設定します。
