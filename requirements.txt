@@ -1,6 +1,7 @@
 PyQt6
 requests
 beautifulsoup4
+pytest
 selenium
 websockets
 ndgr-client @ git+https://github.com/tsukumijima/NDGRClient

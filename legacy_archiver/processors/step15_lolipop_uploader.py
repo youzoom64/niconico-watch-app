@@ -7,6 +7,7 @@ import subprocess
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
@@ -23,6 +24,58 @@ ARCHIVE_DATA_PATTERN = re.compile(
 )
 TIMELINE_MARKERS = ('id="timeline2"', "id='timeline2'")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STEP15_LOCK_PATH = PROJECT_ROOT / "data" / "step15_upload.lock"
+
+
+@contextmanager
+def step15_upload_lock(lv_value: str):
+    """Step15の転送をアプリ内の全プロセスで1件ずつに制限する。"""
+    STEP15_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = STEP15_LOCK_PATH.open("a+b")
+    lock_file.seek(0, os.SEEK_END)
+    if lock_file.tell() == 0:
+        lock_file.write(b"0")
+        lock_file.flush()
+
+    waiting_logged_at = 0.0
+    acquired = False
+    try:
+        while True:
+            try:
+                lock_file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                now = time.monotonic()
+                if now - waiting_logged_at >= 10:
+                    print(f"Step15 待機中: 別のアップロードを実行中 lv={lv_value}")
+                    waiting_logged_at = now
+                time.sleep(1)
+
+        print(f"Step15 アップロード枠取得: lv={lv_value}")
+        yield
+    finally:
+        try:
+            if acquired:
+                lock_file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 def process(pipeline_data):
@@ -57,6 +110,15 @@ def process(pipeline_data):
         {*publish_paths, *changed_html_paths},
         key=publish_sort_key,
     )
+    if not bool(settings.get("upload_audio_enabled", True)):
+        publish_paths = [path for path in publish_paths if not path.endswith("_audio.mp3")]
+    if not bool(settings.get("upload_screenshots_enabled", True)):
+        publish_paths = [
+            path
+            for path in publish_paths
+            if "/screenshot/" not in f"/{path.rstrip('/')}/"
+            and not path.rstrip("/").endswith("/screenshot")
+        ]
     html_only = bool(settings.get("html_only", False))
     if html_only:
         publish_paths = [
@@ -117,7 +179,7 @@ def process(pipeline_data):
     ]
     for relative_path in publish_paths:
         command.extend(("--path", relative_path))
-    command.extend(("--force-overwrite", "--verify-after", "--json"))
+    command.extend(("--verify-after", "--json"))
     if settings.get("http_verify", True):
         command.append("--http-verify")
 
@@ -130,18 +192,19 @@ def process(pipeline_data):
     if username and password:
         child_env["UPLOAD_TARGETS_USERNAME"] = username
         child_env["UPLOAD_TARGETS_PASSWORD"] = password
-    completed = subprocess.run(
-        command,
-        cwd=str(cli_path.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=child_env,
-        timeout=max(30, int(settings.get("timeout_seconds") or 900)),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        check=False,
-    )
+    with step15_upload_lock(lv_value):
+        completed = subprocess.run(
+            command,
+            cwd=str(cli_path.parent),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=child_env,
+            timeout=None,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
     payload = parse_cli_payload(completed.stdout)
     if completed.returncode != 0 or not payload.get("success", False):
         detail = str(payload.get("error") or completed.stderr or "upload failed").strip()
@@ -291,6 +354,17 @@ def collect_publish_paths(
         screenshot_dir = detail_dir / "screenshot"
         if screenshot_dir.is_dir():
             paths.add(screenshot_dir.relative_to(root).as_posix())
+
+    # Step11 updates both the per-broadcast detail page and the shared list
+    # under special_user_<id>.  Publish that directory when it contains the
+    # detail page for the LV currently being processed.
+    for special_dir in root.glob("special_user_*"):
+        if not special_dir.is_dir():
+            continue
+        user_id = special_dir.name.removeprefix("special_user_")
+        detail_path = special_dir / f"{user_id}_{current_lv}_detail.html"
+        if detail_path.is_file():
+            paths.add(special_dir.relative_to(root).as_posix())
 
     return sorted(paths, key=publish_sort_key), sorted(skipped)
 

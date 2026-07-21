@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS special_users (
     post_server_url TEXT,
     post_server_api_key TEXT,
     html_upload_enabled INTEGER NOT NULL DEFAULT 0,
+    upload_audio_enabled INTEGER NOT NULL DEFAULT 1,
+    upload_screenshots_enabled INTEGER NOT NULL DEFAULT 1,
     html_base_url TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -464,6 +466,7 @@ CREATE TABLE IF NOT EXISTS broadcast_archive_meta (
     comments_fetch_error TEXT,
     timeshift_video_download_completed INTEGER NOT NULL DEFAULT 0,
     timeshift_video_download_completed_at TEXT,
+    timeshift_video_path TEXT,
     timeshift_comments_download_completed INTEGER NOT NULL DEFAULT 0,
     timeshift_comments_download_completed_at TEXT,
     timeshift_download_completed INTEGER NOT NULL DEFAULT 0,
@@ -670,6 +673,8 @@ class Config:
     huggingface_token: str
     image_generation_model: str
     image_generation_quality: str
+    ai_text_engine: str
+    ai_text_model: str
     codex_exec_enabled: bool
     codex_exec_provider: str
     codex_exec_command: str
@@ -1170,6 +1175,8 @@ def default_broadcaster_monitor_settings() -> dict[str, int]:
         "emotion_score_enabled": 1,
         "word_extract_enabled": 1,
         "timeline_enabled": 1,
+        "upload_audio_enabled": 1,
+        "upload_screenshots_enabled": 1,
     }
 
 
@@ -1300,20 +1307,8 @@ def existing_recording_video_paths_by_lv(lvs: list[str]) -> dict[str, list[Path]
             if path.is_file() and path.suffix.lower() in video_suffixes
         )
 
-    suffix_priority = {".mp4": 5, ".mkv": 4, ".webm": 3, ".flv": 2, ".ts": 1}
     for lv in normalized:
-        by_recording: dict[str, Path] = {}
-        for path in candidates.get(lv, []):
-            recording_key = path.stem.casefold()
-            current = by_recording.get(recording_key)
-            if current is None or suffix_priority.get(path.suffix.lower(), 0) > suffix_priority.get(
-                current.suffix.lower(), 0
-            ):
-                by_recording[recording_key] = path
-        result[lv] = sorted(
-            by_recording.values(),
-            key=lambda path: (path.stem.casefold(), path.suffix.casefold()),
-        )
+        result[lv] = deduplicate_recording_paths(candidates.get(lv, []))
         if result[lv]:
             postprocess_log(
                 lv,
@@ -1330,6 +1325,30 @@ def existing_recording_video_paths_by_lv(lvs: list[str]) -> dict[str, list[Path]
                 "SlNicoLiveRec保存先にもDB登録パスにも動画なし",
             )
     return result
+
+
+def deduplicate_recording_paths(paths: list[Path | str]) -> list[Path]:
+    """同じ録画区間は1件にし、変換済みMP4をTSなどより優先する。"""
+    suffix_priority = {".mp4": 5, ".mkv": 4, ".webm": 3, ".flv": 2, ".ts": 1}
+    selected: dict[str, Path] = {}
+    for value in paths:
+        path = Path(value)
+        recording_key = str(path.with_suffix("")).casefold()
+        current = selected.get(recording_key)
+        if current is None or suffix_priority.get(path.suffix.lower(), 0) > suffix_priority.get(
+            current.suffix.lower(), 0
+        ):
+            selected[recording_key] = path
+    return sorted(selected.values(), key=lambda path: (path.stem.casefold(), path.suffix.casefold()))
+
+
+def sort_recording_paths_chronologically(paths: list[Path | str]) -> list[Path]:
+    """SlNicoLiveRecのファイル名に記録された開始時刻順へ並べる。"""
+    def sort_key(value: Path) -> tuple[Any, ...]:
+        parsed = parse_slnico_segment_filename(value)
+        return (parsed.get("started_at") if parsed else datetime.max, value.name.casefold())
+
+    return sorted((Path(path) for path in paths), key=sort_key)
 
 
 def archive_processed_video_files(
@@ -1396,6 +1415,13 @@ def archive_processed_video_files(
 
         with connect() as conn:
             for source, destination in moved:
+                conn.execute(
+                    """
+                    DELETE FROM recording_segments
+                    WHERE lv = ? AND source_path = ? AND source_path <> ?
+                    """,
+                    (lv, str(destination), str(source)),
+                )
                 conn.execute(
                     """
                     UPDATE recording_segments
@@ -4355,6 +4381,35 @@ def select_preferred_timeshift_video(
     return Path(near_complete[0]["path"])
 
 
+def resolve_local_video_timeline_source(
+    lv: str,
+    paths: list[Path | str],
+    *,
+    broadcaster_id: str = "",
+) -> tuple[str, list[Path]]:
+    """Prefer a recorded timeshift asset; otherwise use live segments chronologically."""
+    supplied = [Path(path) for path in paths if Path(path).is_file()]
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT timeshift_video_download_completed, timeshift_video_path
+            FROM broadcast_archive_meta
+            WHERE lv = ?
+            """,
+            (lv,),
+        ).fetchone()
+    timeshift_path = Path(str(row["timeshift_video_path"] or "")) if row else None
+    if (
+        row
+        and int(row["timeshift_video_download_completed"] or 0)
+        and timeshift_path
+        and timeshift_path.is_file()
+    ):
+        return "timeshift", [timeshift_path]
+
+    return "live", sort_recording_paths_chronologically(supplied)
+
+
 def running_live_recording_jobs() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -5292,6 +5347,8 @@ def build_recording_gap_concat_plan(
     overlaps: list[dict[str, Any]] = []
     for segment_index, segment in enumerate(segments):
         segment["segment_index"] = segment_index
+        source_duration = max(0.0, float(segment.get("duration_seconds") or 0.0))
+        trim_start = 0.0
         if not isinstance(segment.get("started_at"), datetime):
             segment["clock_start_seconds"] = None
             segment["clock_end_seconds"] = None
@@ -5334,6 +5391,11 @@ def build_recording_gap_concat_plan(
                 }
                 overlaps.append(overlap)
                 segment["clock_overlap_seconds"] = abs(gap_seconds)
+                trim_start = min(source_duration, abs(gap_seconds))
+        effective_duration = max(0.0, source_duration - trim_start)
+        segment["source_duration_seconds"] = source_duration
+        segment["source_trim_start_seconds"] = trim_start
+        segment["effective_duration_seconds"] = effective_duration
         segment["clock_start_seconds"] = initial_offset_seconds + (
             max(0.0, (segment["started_at"] - recording_start).total_seconds())
             if recording_start is not None
@@ -5342,10 +5404,9 @@ def build_recording_gap_concat_plan(
                 for item in segments[:segment_index]
             )
         )
-        segment["clock_end_seconds"] = segment["clock_start_seconds"] + float(
-            segment.get("duration_seconds") or 0.0
-        )
-        ordered_parts.append({"type": "segment", **segment})
+        segment["clock_start_seconds"] += trim_start
+        segment["clock_end_seconds"] = segment["clock_start_seconds"] + effective_duration
+        ordered_parts.append({"type": "segment", **segment, "duration_seconds": effective_duration})
 
     return {
         "input_dir": str(input_dir),
@@ -5631,7 +5692,7 @@ def validate_recording_timeline_plan(
         if clock_error > 0.05:
             errors.append(f"segment clock is discontinuous: {label}: {clock_error:.6f}s")
     for overlap in plan.get("overlaps") or []:
-        errors.append(
+        warnings.append(
             "segment media overlap: "
             f"{Path(str(overlap.get('previous_path') or '')).name} -> "
             f"{Path(str(overlap.get('next_path') or '')).name}: "
@@ -6397,6 +6458,9 @@ def process_completed_recording_segment(
                 "target_dir": final_target_dir,
                 "timeline_offset_seconds": timeline_start,
                 "timeline_end_seconds": timeline_end,
+                "source_trim_start_seconds": float(
+                    (timeline_entry or {}).get("source_trim_start_seconds") or 0.0
+                ),
                 "segment_index_base": segment_index * 1_000_000,
                 "replace_scope": "source",
                 "mark_postprocess_done": False,
@@ -7120,6 +7184,7 @@ def concat_recording_segment_audio(
     }
     inputs: list[Path] = []
     input_durations: list[float] = []
+    input_trim_starts: list[float] = []
     generated_gaps: list[Path] = []
     for part_index, part in enumerate(plan.get("parts") or []):
         duration = max(0.0, float(part.get("duration_seconds") or 0.0))
@@ -7130,6 +7195,7 @@ def concat_recording_segment_audio(
             create_silent_gap_mp3(gap_path, duration, lv=lv)
             inputs.append(gap_path)
             input_durations.append(duration)
+            input_trim_starts.append(0.0)
             generated_gaps.append(gap_path)
             continue
         identity = recording_segment_identity(str(part.get("path") or ""))
@@ -7137,15 +7203,18 @@ def concat_recording_segment_audio(
         if audio_path is None or not audio_path.exists():
             raise FileNotFoundError(f"録画区間MP3が見つかりません: {part.get('path')}")
         actual_segment_duration = probe_media_duration_seconds(audio_path)
-        segment_drift = actual_segment_duration - duration
-        if duration > 0 and abs(segment_drift) > 0.25:
+        source_duration = max(duration, float(part.get("source_duration_seconds") or duration))
+        trim_start = max(0.0, float(part.get("source_trim_start_seconds") or 0.0))
+        segment_drift = actual_segment_duration - source_duration
+        if source_duration > 0 and abs(segment_drift) > 0.25:
             raise RuntimeError(
                 f"録画区間MP3の長さが不正です: {audio_path.name} "
                 f"drift={segment_drift:+.6f}s "
-                f"(expected={duration:.6f}s actual={actual_segment_duration:.6f}s)"
+                f"(expected={source_duration:.6f}s actual={actual_segment_duration:.6f}s)"
             )
         inputs.append(audio_path)
         input_durations.append(duration)
+        input_trim_starts.append(trim_start)
     if not inputs:
         raise FileNotFoundError(f"連結する録画区間MP3がありません: {lv}")
     expected_duration = float(plan.get("total_duration_seconds") or sum(input_durations))
@@ -7154,11 +7223,13 @@ def concat_recording_segment_audio(
     concat_inputs: list[str] = []
     for index, duration in enumerate(input_durations):
         part_samples = max(1, round(duration * 16000))
+        trim_samples = max(0, round(input_trim_starts[index] * 16000))
         label = f"a{index}"
         filter_parts.append(
             f"[{index}:a:0]aresample=16000,"
             "aformat=sample_fmts=s16:channel_layouts=mono,"
-            f"apad=whole_len={part_samples},atrim=end_sample={part_samples},"
+            f"apad=whole_len={trim_samples + part_samples},"
+            f"atrim=start_sample={trim_samples}:end_sample={trim_samples + part_samples},"
             f"asetpts=N/SR/TB[{label}]"
         )
         concat_inputs.append(f"[{label}]")
@@ -7249,18 +7320,19 @@ def mark_stage_failed(lv: str, stage: str, error: str) -> None:
 def build_legacy_archiver_config(config: Config | None = None) -> dict[str, Any]:
     """Return a minimal config shape accepted by copied legacy_archiver steps."""
     config = config or load_config()
-    default_engine = "codex_exec" if config.codex_exec_enabled else "openai"
+    default_engine = str(config.ai_text_engine or "codex_exec")
     legacy_config = {
         "display_name": str(config.recording_account_id or DEFAULT_RECORDING_ACCOUNT_ID),
         "api_settings": {
-            "openai_api_key": config.openai_api_key or os.environ.get("OPENAI_API_KEY", ""),
-            "google_api_key": config.google_api_key or os.environ.get("GOOGLE_API_KEY", ""),
-            "imgur_api_key": config.imgur_api_key or os.environ.get("IMGUR_API_KEY", ""),
-            "huggingface_token": config.huggingface_token or os.environ.get("HF_TOKEN", "") or os.environ.get("HUGGINGFACE_TOKEN", ""),
-            "suno_api_key": config.suno_api_key or os.environ.get("SUNO_API_KEY", ""),
-            "ai_model": os.environ.get("NICONICO_AI_MODEL", "openai-gpt4o"),
-            "summary_ai_model": os.environ.get("NICONICO_SUMMARY_AI_MODEL", "openai-gpt4o"),
-            "conversation_ai_model": os.environ.get("NICONICO_CONVERSATION_AI_MODEL", "openai-gpt4o"),
+            "openai_api_key": config.openai_api_key,
+            "google_api_key": config.google_api_key,
+            "imgur_api_key": config.imgur_api_key,
+            "huggingface_token": config.huggingface_token,
+            "suno_api_key": config.suno_api_key,
+            "ai_model": "google-gemini-2.5-flash" if default_engine == "gemini" else "openai-gpt4o",
+            "summary_ai_model": "google-gemini-2.5-flash" if default_engine == "gemini" else "openai-gpt4o",
+            "conversation_ai_model": "google-gemini-2.5-flash" if default_engine == "gemini" else "openai-gpt4o",
+            "ai_text_model": str(config.ai_text_model or ""),
         },
         "ai_features": {
             "enable_summary_text": bool(config.enable_summary_text),
@@ -7337,8 +7409,8 @@ def build_legacy_archiver_config(config: Config | None = None) -> dict[str, Any]
             "conversation_turns": int(config.conversation_turns or 5),
         },
         "codex_exec": {
-            "enabled": bool(config.codex_exec_enabled),
-            "provider": str(config.codex_exec_provider or "codex"),
+            "enabled": default_engine in {"codex_exec", "claude", "grok"},
+            "provider": {"claude": "claude", "grok": "grok"}.get(default_engine, "codex"),
             "command": str(config.codex_exec_command or "codex"),
             "cwd": str(config.codex_exec_cwd or ROOT),
             "timeout_seconds": int(config.codex_exec_timeout_seconds or 3600),
@@ -7493,6 +7565,12 @@ def apply_monitored_broadcaster_feature_overrides(lv: str, legacy_config: dict[s
             ai_prompts[key] = text
     legacy_config.setdefault("upload_settings", {})["enable_auto_upload"] = bool(
         row["html_upload_enabled"]
+    )
+    legacy_config["upload_settings"]["upload_audio_enabled"] = bool(
+        row["upload_audio_enabled"]
+    )
+    legacy_config["upload_settings"]["upload_screenshots_enabled"] = bool(
+        row["upload_screenshots_enabled"]
     )
     if not int(row["custom_settings_enabled"] or 0):
         return legacy_config
@@ -7737,6 +7815,8 @@ def run_legacy_archiver_steps(
     recording_segment_timeline: dict[str, Any] | None = None,
     force_overwrite_existing_html: bool = False,
     upload_html_only: bool = False,
+    upload_audio_enabled: bool | None = None,
+    upload_screenshots_enabled: bool | None = None,
     input_video_paths: list[Path | str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -7755,6 +7835,10 @@ def run_legacy_archiver_steps(
         pipeline_data["config"]["force_overwrite_existing_html"] = True
     if upload_html_only:
         pipeline_data["config"].setdefault("upload_settings", {})["html_only"] = True
+    if upload_audio_enabled is not None:
+        pipeline_data["config"].setdefault("upload_settings", {})["upload_audio_enabled"] = bool(upload_audio_enabled)
+    if upload_screenshots_enabled is not None:
+        pipeline_data["config"].setdefault("upload_settings", {})["upload_screenshots_enabled"] = bool(upload_screenshots_enabled)
     ai_features = pipeline_data["config"].get("ai_features", {})
     display_features = pipeline_data["config"].get("display_features", {})
     default_steps = []
@@ -7880,6 +7964,8 @@ def run_finalize_pipeline_for_lv(
     timeline_mode: str = "live",
     segment_paths: list[Path | str] | None = None,
     legacy_steps: list[str] | None = None,
+    upload_audio_enabled: bool | None = None,
+    upload_screenshots_enabled: bool | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     config = load_config()
@@ -8121,6 +8207,8 @@ def run_finalize_pipeline_for_lv(
             config=config,
             recording_segment_timeline=timeline_plan,
             steps=legacy_steps,
+            upload_audio_enabled=upload_audio_enabled,
+            upload_screenshots_enabled=upload_screenshots_enabled,
         )
         html_file = (
             result.get("legacy_archiver", {})
@@ -8225,14 +8313,20 @@ def normalize_transcription_rows_for_timeline(
     *,
     timeline_offset_seconds: float = 0.0,
     timeline_end_seconds: float | None = None,
+    source_trim_start_seconds: float = 0.0,
     segment_index_base: int = 0,
 ) -> list[dict[str, Any]]:
     offset = max(0.0, float(timeline_offset_seconds or 0.0))
+    trim_start = max(0.0, float(source_trim_start_seconds or 0.0))
     rows: list[dict[str, Any]] = []
     for local_index, source in enumerate(segments):
         row = dict(source)
-        local_start = float(row.get("start_seconds") or row.get("start") or 0.0)
-        local_end = float(row.get("end_seconds") or row.get("end") or local_start)
+        source_local_start = float(row.get("start_seconds") or row.get("start") or 0.0)
+        source_local_end = float(row.get("end_seconds") or row.get("end") or source_local_start)
+        if source_local_end <= trim_start:
+            continue
+        local_start = max(0.0, source_local_start - trim_start)
+        local_end = max(local_start, source_local_end - trim_start)
         local_start, local_end, start_seconds, end_seconds = (
             clamp_transcription_interval_to_timeline_end(
                 local_start,
@@ -8320,6 +8414,10 @@ def rebase_recording_segment_transcripts(
             continue
 
         new_offset = float(timeline_entry.get("timeline_start_seconds") or 0.0)
+        trim_start = max(
+            0.0,
+            float(timeline_entry.get("source_trim_start_seconds") or 0.0),
+        )
         timeline_end = float(
             timeline_entry.get("timeline_end_seconds")
             or (
@@ -8354,6 +8452,10 @@ def rebase_recording_segment_transcripts(
                 local_end = float(raw["local_end_seconds"])
             except (KeyError, TypeError, ValueError):
                 local_end = float(saved_row["end_seconds"] or 0.0) - old_offset
+            if local_end <= trim_start:
+                continue
+            local_start = max(0.0, local_start - trim_start)
+            local_end = max(local_start, local_end - trim_start)
             local_start, local_end, start_seconds, end_seconds = (
                 clamp_transcription_interval_to_timeline_end(
                     local_start,
@@ -8534,6 +8636,7 @@ def transcribe_audio_with_faster_whisper(
     target_dir: Path | str | None = None,
     timeline_offset_seconds: float = 0.0,
     timeline_end_seconds: float | None = None,
+    source_trim_start_seconds: float = 0.0,
     segment_index_base: int = 0,
     replace_scope: str = "broadcast",
     mark_postprocess_done: bool = True,
@@ -8724,6 +8827,7 @@ def transcribe_audio_with_faster_whisper(
         rows,
         timeline_offset_seconds=timeline_offset_seconds,
         timeline_end_seconds=timeline_end_seconds,
+        source_trim_start_seconds=source_trim_start_seconds,
         segment_index_base=segment_index_base,
     )
     with connect() as conn:
@@ -8789,6 +8893,7 @@ def transcribe_audio_with_whisperx(
     target_dir: Path | str | None = None,
     timeline_offset_seconds: float = 0.0,
     timeline_end_seconds: float | None = None,
+    source_trim_start_seconds: float = 0.0,
     segment_index_base: int = 0,
     replace_scope: str = "broadcast",
     mark_postprocess_done: bool = True,
@@ -8981,6 +9086,7 @@ def transcribe_audio_with_whisperx(
         rows,
         timeline_offset_seconds=timeline_offset_seconds,
         timeline_end_seconds=timeline_end_seconds,
+        source_trim_start_seconds=source_trim_start_seconds,
         segment_index_base=segment_index_base,
     )
     with connect() as conn:
@@ -10653,6 +10759,17 @@ def resolve_broadcaster_trigger(
 def load_config() -> Config:
     config_exists = CONFIG_PATH.exists()
     raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if config_exists else {}
+    legacy_ai_model = str(raw.get("ai_text_model") or raw.get("codex_exec_model") or "")
+    if raw.get("ai_text_engine"):
+        ai_text_engine = str(raw["ai_text_engine"])
+    elif bool(raw.get("codex_exec_enabled", True)):
+        ai_text_engine = {"claude": "claude", "grok": "grok"}.get(
+            str(raw.get("codex_exec_provider", "codex")), "codex_exec"
+        )
+    elif "google" in legacy_ai_model.lower() or "gemini" in legacy_ai_model.lower():
+        ai_text_engine = "gemini"
+    else:
+        ai_text_engine = "openai"
     config = Config(
         recent_url=raw.get("recent_url", "https://live.nicovideo.jp/recent?tab=common"),
         tracker_fetch_method=str(raw.get("tracker_fetch_method", "api")),
@@ -10730,6 +10847,8 @@ def load_config() -> Config:
         huggingface_token=str(raw.get("huggingface_token", "")),
         image_generation_model=str(raw.get("image_generation_model", "gpt-image-2")),
         image_generation_quality=str(raw.get("image_generation_quality", "medium")),
+        ai_text_engine=ai_text_engine,
+        ai_text_model=str(raw.get("ai_text_model", "")),
         codex_exec_enabled=bool(raw.get("codex_exec_enabled", True)),
         codex_exec_provider=str(raw.get("codex_exec_provider", "codex")),
         codex_exec_command=str(raw.get("codex_exec_command", "codex")),
@@ -10866,6 +10985,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     timeshift_part_columns = {
         "timeshift_video_download_completed": "INTEGER NOT NULL DEFAULT 0",
         "timeshift_video_download_completed_at": "TEXT",
+        "timeshift_video_path": "TEXT",
         "timeshift_comments_download_completed": "INTEGER NOT NULL DEFAULT 0",
         "timeshift_comments_download_completed_at": "TEXT",
     }
@@ -10994,6 +11114,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     }
     monitored_required = {
         "html_generation_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "upload_audio_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "upload_screenshots_enabled": "INTEGER NOT NULL DEFAULT 1",
         "custom_settings_enabled": "INTEGER NOT NULL DEFAULT 0",
         "thumbnail_10sec_enabled": "INTEGER NOT NULL DEFAULT 1",
         "audio_timeline_enabled": "INTEGER NOT NULL DEFAULT 1",
@@ -12583,20 +12705,21 @@ def mark_timeshift_download_completed(lv: str) -> None:
         conn.commit()
 
 
-def mark_timeshift_video_download_completed(lv: str) -> None:
+def mark_timeshift_video_download_completed(lv: str, video_path: Path | str = "") -> None:
     completed_at = now_micro()
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO broadcast_archive_meta
                 (lv, fetched_at, timeshift_video_download_completed,
-                 timeshift_video_download_completed_at)
-            VALUES (?, ?, 1, ?)
+                 timeshift_video_download_completed_at, timeshift_video_path)
+            VALUES (?, ?, 1, ?, ?)
             ON CONFLICT(lv) DO UPDATE SET
                 timeshift_video_download_completed = 1,
-                timeshift_video_download_completed_at = excluded.timeshift_video_download_completed_at
+                timeshift_video_download_completed_at = excluded.timeshift_video_download_completed_at,
+                timeshift_video_path = excluded.timeshift_video_path
             """,
-            (lv, completed_at, completed_at),
+            (lv, completed_at, completed_at, str(video_path or "")),
         )
         conn.commit()
 

@@ -23,7 +23,7 @@ import requests
 from bs4 import BeautifulSoup
 from app.generated_html_paths import is_pc_archive_html_candidate
 from PyQt6.QtCore import QAbstractTableModel, QByteArray, QDate, QItemSelectionModel, QModelIndex, QObject, QProcess, QProcessEnvironment, QRunnable, QSize, QThread, QThreadPool, QTimer, Qt, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QLinearGradient, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QLinearGradient, QPainter, QPixmap, QTextCursor
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QGroupBox,
     QHeaderView,
@@ -674,7 +675,12 @@ def install_table_copy_menu(table: QTableView) -> None:
         row_text = "\t".join(index_text(model.index(index.row(), column)) for column in range(model.columnCount()))
         copy_row = menu.addAction("この行をTSVでコピー")
         copy_row.triggered.connect(lambda _=False, text=row_text: copy_text(text, "行コピー"))
-        row_json = json.dumps(row, ensure_ascii=False, indent=2)
+        json_row = {
+            key: value
+            for key, value in row.items()
+            if not key.startswith("_") and not isinstance(value, QPixmap)
+        }
+        row_json = json.dumps(json_row, ensure_ascii=False, indent=2)
         copy_json = menu.addAction("この行をJSONでコピー")
         copy_json.triggered.connect(lambda _=False, text=row_json: copy_text(text, "行JSONコピー"))
         selected_text = selected_rows_text()
@@ -2212,7 +2218,7 @@ class ServerUploadSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("サーバー設定")
         self.resize(560, 300)
-        self.html_upload_enabled = QCheckBox("HTMLサーバー送信を有効にする")
+        self.html_upload_enabled = QCheckBox("Step15でHTMLを自動アップロードする")
         self.html_upload_enabled.setChecked(bool(values.get("html_upload_enabled", 0)))
         self.post_server_url = QLineEdit(str(values.get("post_server_url") or ""))
         self.post_server_url.setPlaceholderText("HTTP API URL または ローカル/共有フォルダ")
@@ -4243,8 +4249,13 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         add_archive_tag.clicked.connect(lambda _checked=False: self.add_archive_tag_row())
         remove_archive_tag = QPushButton("選択行を削除")
         remove_archive_tag.clicked.connect(lambda _checked=False: self.remove_archive_tag_rows())
+        reload_archive_tags = QPushButton("DBから更新")
+        reload_archive_tags.clicked.connect(
+            lambda _checked=False: self.reload_archive_tags_from_db()
+        )
         archive_tag_buttons.addWidget(add_archive_tag)
         archive_tag_buttons.addWidget(remove_archive_tag)
+        archive_tag_buttons.addWidget(reload_archive_tags)
         archive_tag_buttons.addStretch(1)
         archive_tags_layout.addLayout(archive_tag_buttons)
         self.transcription_hotwords_enabled = QCheckBox(
@@ -4317,6 +4328,8 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         self.abstract_image_enabled = QCheckBox("抽象的要約画像を作る")
         self.emotion_score_enabled = QCheckBox("感情スコアを作る")
         self.word_extract_enabled = QCheckBox("言葉抽出を作る")
+        self.upload_audio_enabled = QCheckBox("Step15でMP3をアップロード")
+        self.upload_screenshots_enabled = QCheckBox("Step15でスクリーンショットをアップロード")
         for key in tracker.default_broadcaster_monitor_settings():
             widget = getattr(self, key, None)
             if isinstance(widget, QCheckBox):
@@ -4436,6 +4449,9 @@ class MonitoredBroadcasterEditorDialog(QDialog):
             self.abstract_image_enabled,
             self.emotion_score_enabled,
             self.word_extract_enabled,
+            self.upload_audio_enabled,
+            self.upload_screenshots_enabled,
+            self.html_upload_enabled,
         ]:
             feature_layout.addWidget(widget)
         left_layout.addWidget(feature_box)
@@ -4447,7 +4463,6 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         self.add_field(ai_layout, "スペシャルユーザーまとめ担当", self.special_user_summary_engine)
         self.add_field(ai_layout, "投稿サーバーURL", self.post_server_url)
         self.add_field(ai_layout, "投稿サーバーAPIキー", self.post_server_api_key)
-        ai_layout.addWidget(self.html_upload_enabled)
         self.add_field(ai_layout, "HTMLベースURL", self.html_base_url)
         right_layout.addWidget(ai_box)
 
@@ -4567,6 +4582,46 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         for row in rows:
             self.archive_tags_table.removeRow(row)
 
+    def reload_archive_tags_from_db(self) -> None:
+        broadcaster_id = self.broadcaster_id.text().strip()
+        broadcaster = next(
+            (
+                row
+                for row in tracker.list_monitored_broadcasters()
+                if str(row.get("broadcaster_id") or "").strip() == broadcaster_id
+            ),
+            None,
+        )
+        if not broadcaster:
+            return
+        try:
+            loaded_aliases = json.loads(
+                self.person_aliases_path.read_text(encoding="utf-8-sig")
+            )
+            if isinstance(loaded_aliases, dict):
+                self.person_aliases_payload = loaded_aliases
+        except (OSError, json.JSONDecodeError):
+            self.person_aliases_payload = {}
+        self.archive_tags_table.setRowCount(0)
+        canonical_aliases = self.person_aliases_payload.get("canonical_names")
+        if not isinstance(canonical_aliases, dict):
+            canonical_aliases = {}
+        for raw_line in str(broadcaster.get("archive_tags") or "").replace("\r", "").split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "=>" in line:
+                recognition, canonical = (part.strip() for part in line.split("=>", 1))
+            else:
+                recognition = canonical = line
+            aliases = canonical_aliases.get(canonical, [])
+            self.add_archive_tag_row(
+                recognition,
+                canonical,
+                ", ".join(str(alias).strip() for alias in aliases if str(alias).strip())
+                if isinstance(aliases, list) else "",
+            )
+
     def archive_tag_values(self) -> str:
         lines: list[str] = []
         for row in range(self.archive_tags_table.rowCount()):
@@ -4659,6 +4714,8 @@ class MonitoredBroadcasterEditorDialog(QDialog):
             "abstract_image_enabled": int(self.abstract_image_enabled.isChecked()),
             "emotion_score_enabled": int(self.emotion_score_enabled.isChecked()),
             "word_extract_enabled": int(self.word_extract_enabled.isChecked()),
+            "upload_audio_enabled": int(self.upload_audio_enabled.isChecked()),
+            "upload_screenshots_enabled": int(self.upload_screenshots_enabled.isChecked()),
             "summary_engine": str(self.summary_engine.currentData()),
             "ai_conversation_engine": str(self.ai_conversation_engine.currentData()),
             "special_user_summary_engine": str(self.special_user_summary_engine.currentData()),
@@ -5703,6 +5760,19 @@ class SettingsTab(QWidget):
         self.openai_api_key = QLineEdit()
         self.openai_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.openai_api_key.setPlaceholderText("OpenAI API Key")
+        self.openai_api_key_visibility_button = QPushButton("表示")
+        self.openai_api_key_visibility_button.setCheckable(True)
+        self.openai_api_key_visibility_button.setFixedWidth(56)
+        self.openai_api_key_visibility_button.toggled.connect(
+            lambda visible: self.openai_api_key.setEchoMode(
+                QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+            )
+        )
+        self.openai_api_key_visibility_button.toggled.connect(
+            lambda visible: self.openai_api_key_visibility_button.setText(
+                "隠す" if visible else "表示"
+            )
+        )
         self.google_api_key = QLineEdit()
         self.google_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.google_api_key.setPlaceholderText("Google API Key")
@@ -5720,13 +5790,16 @@ class SettingsTab(QWidget):
         self.image_generation_quality.setEditable(False)
         for label, value in [("低", "low"), ("中", "medium"), ("高", "high")]:
             self.image_generation_quality.addItem(label, value)
-        self.codex_exec_enabled = QCheckBox("AIテキスト生成をCodex execで実行する")
-        self.codex_exec_provider = NoWheelComboBox()
-        self.codex_exec_provider.addItem("Codex exec", "codex")
-        self.codex_exec_provider.addItem("ClaudeCode", "claude")
-        self.codex_exec_provider.addItem("Grok build", "grok")
+        self.ai_text_engine = NoWheelComboBox()
+        self.ai_text_engine.addItem("OpenAI API（ChatGPT）", "openai")
+        self.ai_text_engine.addItem("Google Gemini API", "gemini")
+        self.ai_text_engine.addItem("Codex CLI", "codex_exec")
+        self.ai_text_engine.addItem("Claude Code CLI", "claude")
+        self.ai_text_engine.addItem("Grok CLI", "grok")
+        self.ai_api_model = QLineEdit()
+        self.ai_api_model.setPlaceholderText("例: gpt-4o / gemini-2.5-flash")
         self.codex_exec_command = QLineEdit()
-        self.codex_exec_command.setPlaceholderText("codex")
+        self.codex_exec_command.setPlaceholderText("codex / claude / grok")
         self.codex_exec_model = QLineEdit()
         self.codex_exec_model.setPlaceholderText("例: grok-build / sonnet / gpt-5.5")
         self.codex_exec_effort = QLineEdit()
@@ -5746,6 +5819,17 @@ class SettingsTab(QWidget):
         self.archive_upload_password = QLineEdit()
         self.archive_upload_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.archive_upload_password.setPlaceholderText("FTPパスワード")
+        self.secret_key_fields = [
+            self.suno_api_key,
+            self.openai_api_key,
+            self.google_api_key,
+            self.imgur_api_key,
+            self.huggingface_token,
+            self.archive_upload_password,
+        ]
+        self.toggle_all_keys_button = QPushButton("すべてのキーを表示")
+        self.toggle_all_keys_button.setCheckable(True)
+        self.toggle_all_keys_button.toggled.connect(self.toggle_all_key_visibility)
         self.status = QLabel("未取得")
 
         self.open_login_button = QPushButton("ログイン用Chromeを開く")
@@ -5877,8 +5961,6 @@ class SettingsTab(QWidget):
 
         music_box = QGroupBox("Step06 AI曲生成 / Suno API")
         music_layout = QVBoxLayout(music_box)
-        music_layout.addWidget(QLabel("Suno APIキー"))
-        music_layout.addWidget(self.suno_api_key)
         music_layout.addWidget(QLabel("モデル"))
         model_row = QWidget()
         model_row_layout = QHBoxLayout(model_row)
@@ -5892,19 +5974,19 @@ class SettingsTab(QWidget):
 
         image_box = QGroupBox("Step07 抽象画像生成")
         image_layout = QVBoxLayout(image_box)
-        image_layout.addWidget(QLabel("OpenAI APIキー（抽象画像生成に使用）"))
-        image_layout.addWidget(self.openai_api_key)
         image_layout.addWidget(QLabel("画像生成モデル"))
         image_layout.addWidget(self.image_generation_model)
         image_layout.addWidget(QLabel("品質"))
         image_layout.addWidget(self.image_generation_quality)
-        image_layout.addWidget(QLabel("Imgur Client-ID"))
-        image_layout.addWidget(self.imgur_api_key)
 
-        whisperx_box = QGroupBox("WhisperX / 話者分離")
-        whisperx_layout = QVBoxLayout(whisperx_box)
-        whisperx_layout.addWidget(QLabel("HuggingFace Token"))
-        whisperx_layout.addWidget(self.huggingface_token)
+        credentials_box = QGroupBox("認証情報")
+        credentials_layout = QFormLayout(credentials_box)
+        credentials_layout.addRow("OpenAI APIキー", self.openai_api_key)
+        credentials_layout.addRow("Google APIキー", self.google_api_key)
+        credentials_layout.addRow("Suno APIキー", self.suno_api_key)
+        credentials_layout.addRow("Imgur Client-ID", self.imgur_api_key)
+        credentials_layout.addRow("Hugging Face Token", self.huggingface_token)
+        credentials_layout.addRow("", self.toggle_all_keys_button)
 
         codex_box = QGroupBox("AIテキスト生成")
         codex_layout = QVBoxLayout(codex_box)
@@ -5914,21 +5996,27 @@ class SettingsTab(QWidget):
         )
         text_ai_description.setWordWrap(True)
         codex_layout.addWidget(text_ai_description)
-        codex_layout.addWidget(self.codex_exec_enabled)
-        codex_layout.addWidget(QLabel("Google APIキー"))
-        codex_layout.addWidget(self.google_api_key)
-        codex_layout.addWidget(QLabel("AI CLI"))
-        codex_layout.addWidget(self.codex_exec_provider)
-        codex_layout.addWidget(QLabel("Codexコマンド"))
+        codex_layout.addWidget(QLabel("AI実行方式"))
+        codex_layout.addWidget(self.ai_text_engine)
+        self.ai_api_model_label = QLabel("APIモデル")
+        codex_layout.addWidget(self.ai_api_model_label)
+        codex_layout.addWidget(self.ai_api_model)
+        self.ai_cli_command_label = QLabel("CLIコマンド")
+        codex_layout.addWidget(self.ai_cli_command_label)
         codex_layout.addWidget(self.codex_exec_command)
-        codex_layout.addWidget(QLabel("モデル"))
+        self.ai_cli_model_label = QLabel("CLIモデル")
+        codex_layout.addWidget(self.ai_cli_model_label)
         codex_layout.addWidget(self.codex_exec_model)
-        codex_layout.addWidget(QLabel("Effort"))
+        self.ai_cli_effort_label = QLabel("Effort")
+        codex_layout.addWidget(self.ai_cli_effort_label)
         codex_layout.addWidget(self.codex_exec_effort)
-        codex_layout.addWidget(QLabel("作業ディレクトリ"))
+        self.ai_cli_cwd_label = QLabel("作業ディレクトリ")
+        codex_layout.addWidget(self.ai_cli_cwd_label)
         codex_layout.addWidget(self.codex_exec_cwd)
-        codex_layout.addWidget(QLabel("タイムアウト"))
+        self.ai_cli_timeout_label = QLabel("タイムアウト")
+        codex_layout.addWidget(self.ai_cli_timeout_label)
         codex_layout.addWidget(self.codex_exec_timeout_seconds)
+        self.ai_text_engine.currentIndexChanged.connect(self.update_ai_text_engine_fields)
 
         upload_box = QGroupBox("Step 15 アップロードサーバー")
         upload_layout = QVBoxLayout(upload_box)
@@ -5951,7 +6039,7 @@ class SettingsTab(QWidget):
         content_layout.addWidget(pipeline_box)
         content_layout.addWidget(music_box)
         content_layout.addWidget(image_box)
-        content_layout.addWidget(whisperx_box)
+        content_layout.addWidget(credentials_box)
         content_layout.addWidget(codex_box)
         content_layout.addWidget(upload_box)
         content_layout.addStretch(1)
@@ -6056,13 +6144,14 @@ class SettingsTab(QWidget):
             quality_index = self.image_generation_quality.findData(config.image_generation_quality)
             if quality_index >= 0:
                 self.image_generation_quality.setCurrentIndex(quality_index)
-            self.codex_exec_enabled.setChecked(bool(config.codex_exec_enabled))
-            self.set_combo_value(self.codex_exec_provider, config.codex_exec_provider)
+            self.set_combo_value(self.ai_text_engine, config.ai_text_engine)
+            self.ai_api_model.setText(config.ai_text_model)
             self.codex_exec_command.setText(config.codex_exec_command)
             self.codex_exec_model.setText(config.codex_exec_model)
             self.codex_exec_effort.setText(config.codex_exec_effort)
             self.codex_exec_cwd.setText(config.codex_exec_cwd)
             self.codex_exec_timeout_seconds.setValue(int(config.codex_exec_timeout_seconds or 3600))
+            self.update_ai_text_engine_fields()
             self.enable_archive_auto_upload.setChecked(bool(config.enable_archive_auto_upload))
             self.archive_upload_target_id.setText(config.archive_upload_target_id)
             self.archive_upload_remote_dir_template.setText(config.archive_upload_remote_dir_template)
@@ -6105,6 +6194,46 @@ class SettingsTab(QWidget):
         else:
             self.session_value.setEchoMode(QLineEdit.EchoMode.Password)
             self.toggle_session_visibility_button.setText("👁️")
+
+    def toggle_all_key_visibility(self, visible: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        for field in self.secret_key_fields:
+            field.setEchoMode(mode)
+        self.toggle_all_keys_button.setText(
+            "すべてのキーを隠す" if visible else "すべてのキーを表示"
+        )
+        self.openai_api_key_visibility_button.blockSignals(True)
+        self.openai_api_key_visibility_button.setChecked(visible)
+        self.openai_api_key_visibility_button.setText("隠す" if visible else "表示")
+        self.openai_api_key_visibility_button.blockSignals(False)
+
+    def update_ai_text_engine_fields(self) -> None:
+        engine = str(self.ai_text_engine.currentData() or "codex_exec")
+        api_mode = engine in {"openai", "gemini"}
+        cli_mode = engine in {"codex_exec", "claude", "grok"}
+        codex_mode = engine == "codex_exec"
+        self.ai_api_model_label.setVisible(api_mode)
+        self.ai_api_model.setVisible(api_mode)
+        for widget in (
+            self.ai_cli_command_label,
+            self.codex_exec_command,
+            self.ai_cli_model_label,
+            self.codex_exec_model,
+            self.ai_cli_cwd_label,
+            self.codex_exec_cwd,
+            self.ai_cli_timeout_label,
+            self.codex_exec_timeout_seconds,
+        ):
+            widget.setVisible(cli_mode)
+        self.ai_cli_effort_label.setVisible(codex_mode)
+        self.codex_exec_effort.setVisible(codex_mode)
+        if api_mode and not self.ai_api_model.text().strip():
+            self.ai_api_model.setText("gpt-4o" if engine == "openai" else "gemini-2.5-flash")
+        if cli_mode:
+            defaults = {"codex_exec": "codex", "claude": "claude", "grok": "grok"}
+            current = self.codex_exec_command.text().strip()
+            if not current or current in {"codex", "claude", "grok"}:
+                self.codex_exec_command.setText(defaults[engine])
 
     def set_combo_value(self, combo: QComboBox, value: str) -> None:
         index = combo.findData(value)
@@ -6244,8 +6373,10 @@ class SettingsTab(QWidget):
                 "huggingface_token": self.huggingface_token.text().strip(),
                 "image_generation_model": str(self.image_generation_model.currentText() or "gpt-image-2").strip(),
                 "image_generation_quality": str(self.image_generation_quality.currentData() or "medium"),
-                "codex_exec_enabled": self.codex_exec_enabled.isChecked(),
-                "codex_exec_provider": str(self.codex_exec_provider.currentData()),
+                "ai_text_engine": str(self.ai_text_engine.currentData() or "codex_exec"),
+                "ai_text_model": self.ai_api_model.text().strip(),
+                "codex_exec_enabled": str(self.ai_text_engine.currentData()) in {"codex_exec", "claude", "grok"},
+                "codex_exec_provider": {"claude": "claude", "grok": "grok"}.get(str(self.ai_text_engine.currentData()), "codex"),
                 "codex_exec_command": self.codex_exec_command.text().strip() or "codex",
                 "codex_exec_model": self.codex_exec_model.text().strip(),
                 "codex_exec_effort": self.codex_exec_effort.text().strip(),
@@ -7944,8 +8075,23 @@ def fetch_nicovideo_user_profile(user_id: str) -> dict[str, str]:
         title = soup.find("title")
         if title and title.text.strip():
             name = title.text.split("-")[0].strip()
-    icon_meta = soup.find("meta", {"property": "og:image"})
-    icon_url = str(icon_meta.get("content") or "").strip() if icon_meta else ""
+    icon_url = ""
+    try:
+        thumb_response = requests.get(
+            f"https://ext.nicovideo.jp/thumb_user/{user_id}",
+            headers=NICOVIDEO_BROWSER_HEADERS,
+            timeout=10,
+        )
+        thumb_response.raise_for_status()
+        thumb_soup = BeautifulSoup(thumb_response.text, "html.parser")
+        thumb_icon = thumb_soup.select_one(".user_img img")
+        if thumb_icon:
+            icon_url = str(thumb_icon.get("src") or "").strip()
+    except Exception:
+        append_app_log(traceback.format_exc(), "DEBUG")
+    if not icon_url:
+        icon_meta = soup.find("meta", {"property": "og:image"})
+        icon_url = str(icon_meta.get("content") or "").strip() if icon_meta else ""
     if not name:
         raise RuntimeError("名前を取得できなかった")
     return {"name": name, "icon_url": icon_url}
@@ -8091,6 +8237,54 @@ FINALIZE_LEGACY_STEP_DISPLAY_NAMES = {
     "step15_lolipop_uploader": "アーカイブ公開",
 }
 
+TIMESHIFT_STEP_CHECK_STATE_PATH = tracker.DATA_DIR / "timeshift_step_checks.json"
+
+
+def load_timeshift_step_check_state() -> dict[str, bool]:
+    try:
+        payload = json.loads(TIMESHIFT_STEP_CHECK_STATE_PATH.read_text(encoding="utf-8-sig"))
+        return {
+            step_name: bool(payload[step_name])
+            for step_name in FINALIZE_LEGACY_STEP_DISPLAY_NAMES
+            if step_name in payload
+        }
+    except Exception:
+        return {}
+
+
+def save_timeshift_step_check_state(step_checks: dict[str, QCheckBox]) -> None:
+    try:
+        TIMESHIFT_STEP_CHECK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = TIMESHIFT_STEP_CHECK_STATE_PATH.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(
+                {step_name: check.isChecked() for step_name, check in step_checks.items()},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(TIMESHIFT_STEP_CHECK_STATE_PATH)
+    except Exception:
+        append_app_log(traceback.format_exc(), "DEBUG")
+
+
+def sync_timeshift_all_steps_check(master: QCheckBox, checks: dict[str, QCheckBox]) -> None:
+    master.blockSignals(True)
+    master.setChecked(bool(checks) and all(check.isChecked() for check in checks.values()))
+    master.blockSignals(False)
+
+
+def set_all_timeshift_step_checks(
+    master: QCheckBox, checks: dict[str, QCheckBox], checked: bool
+) -> None:
+    for check in checks.values():
+        check.blockSignals(True)
+        check.setChecked(bool(checked))
+        check.blockSignals(False)
+    save_timeshift_step_check_state(checks)
+    sync_timeshift_all_steps_check(master, checks)
+
 
 def finalize_stage_start_display(stage: str, message: str) -> str:
     if message == "stage=running":
@@ -8110,12 +8304,16 @@ class TimeshiftFinalizeJob(QRunnable):
         *,
         legacy_steps: list[str],
         run_preprocessing: bool,
+        upload_audio: bool = True,
+        upload_screenshots: bool = True,
     ) -> None:
         super().__init__()
         ordered_lvs = tracker.sort_broadcast_lvs_oldest_first(list(groups))
         self.groups = {lv: list(groups[lv]) for lv in ordered_lvs}
         self.legacy_steps = list(legacy_steps)
         self.run_preprocessing = bool(run_preprocessing)
+        self.upload_audio = bool(upload_audio)
+        self.upload_screenshots = bool(upload_screenshots)
         self.signals = TimeshiftFinalizeSignals()
 
     @pyqtSlot()
@@ -8166,14 +8364,24 @@ class TimeshiftFinalizeJob(QRunnable):
                         step for step in self.legacy_steps
                         if step not in {"step01_data_collector", "step02_audio_transcriber"}
                     ]
+                    timeline_mode, preferred_paths = tracker.resolve_local_video_timeline_source(
+                        lv,
+                        paths,
+                        broadcaster_id=broadcaster_id,
+                    )
+                    self.signals.progress.emit(
+                        f"{lv}: 取得種別={timeline_mode} / 使用動画={len(preferred_paths)}件"
+                    )
                     result = tracker.run_finalize_pipeline_for_lv(
                         lv,
                         broadcaster_id=broadcaster_id,
-                        input_dir=paths[0].parent,
+                        input_dir=preferred_paths[0].parent,
                         transcribe="step02_audio_transcriber" in self.legacy_steps,
-                        timeline_mode="timeshift",
-                        segment_paths=paths,
+                        timeline_mode=timeline_mode,
+                        segment_paths=preferred_paths,
                         legacy_steps=downstream_steps,
+                        upload_audio_enabled=self.upload_audio,
+                        upload_screenshots_enabled=self.upload_screenshots,
                         progress_callback=lambda message, current_lv=lv: self.signals.detail.emit(
                             f"{current_lv}: {message}"
                         ),
@@ -8185,6 +8393,8 @@ class TimeshiftFinalizeJob(QRunnable):
                         steps=self.legacy_steps,
                         force_overwrite_existing_html=True,
                         input_video_paths=paths,
+                        upload_audio_enabled=self.upload_audio,
+                        upload_screenshots_enabled=self.upload_screenshots,
                         progress_callback=lambda message, current_lv=lv: self.signals.detail.emit(
                             f"{current_lv}: {message}"
                         ),
@@ -8258,16 +8468,40 @@ class TimeshiftLocalFilesTab(QWidget):
         self.step_box.setVisible(True)
         self.step_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         step_layout = QVBoxLayout(self.step_box)
+        self.all_steps_check = QCheckBox("全て選択")
+        step_layout.addWidget(self.all_steps_check)
+        saved_step_state = load_timeshift_step_check_state()
         for offset in (0, 8):
             row = QHBoxLayout()
             for step_name in self.archive_step_names[offset : offset + 8]:
                 check = QCheckBox(step_name.replace("step", ""))
                 check.setToolTip(FINALIZE_LEGACY_STEP_DISPLAY_NAMES[step_name])
-                check.setChecked(True)
+                check.setChecked(saved_step_state.get(step_name, True))
                 self.step_checks[step_name] = check
+                check.stateChanged.connect(
+                    lambda _state, checks=self.step_checks, master=self.all_steps_check: (
+                        save_timeshift_step_check_state(checks),
+                        sync_timeshift_all_steps_check(master, checks),
+                    )
+                )
                 row.addWidget(check)
             row.addStretch(1)
             step_layout.addLayout(row)
+        sync_timeshift_all_steps_check(self.all_steps_check, self.step_checks)
+        self.all_steps_check.toggled.connect(
+            lambda checked, master=self.all_steps_check, checks=self.step_checks:
+            set_all_timeshift_step_checks(master, checks, checked)
+        )
+
+        upload_row = QHBoxLayout()
+        self.upload_audio_check = QCheckBox("MP3をアップロード")
+        self.upload_audio_check.setChecked(True)
+        self.upload_screenshots_check = QCheckBox("スクショをアップロード")
+        self.upload_screenshots_check.setChecked(True)
+        upload_row.addWidget(self.upload_audio_check)
+        upload_row.addWidget(self.upload_screenshots_check)
+        upload_row.addStretch(1)
+        step_layout.addLayout(upload_row)
 
         add_button = QPushButton("動画を追加")
         add_button.clicked.connect(self.choose_files)
@@ -8445,6 +8679,8 @@ class TimeshiftLocalFilesTab(QWidget):
             groups,
             legacy_steps=selected_steps,
             run_preprocessing=run_preprocessing,
+            upload_audio=self.upload_audio_check.isChecked(),
+            upload_screenshots=self.upload_screenshots_check.isChecked(),
         )
         self.active_job.signals.progress.connect(self.append_status)
         self.active_job.signals.detail.connect(self.append_detail_status)
@@ -8868,6 +9104,8 @@ class TimeshiftTagEditorTab(QWidget):
         super().__init__(parent)
         self.active_job: BroadcastTagEditJob | None = None
         self.interval_job: IntervalTranscriptionJob | None = None
+        self.interval_queue: list[tuple[int, float, float, list[int]]] = []
+        self.interval_multi_selection: list[int] = []
         self.interval_play_end_ms = 0
         self.interval_audio_output = QAudioOutput(self)
         self.interval_player = QMediaPlayer(self)
@@ -8910,6 +9148,7 @@ class TimeshiftTagEditorTab(QWidget):
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.transcript_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.transcript_table.itemSelectionChanged.connect(self.remember_interval_selection)
         load_button = QPushButton("現在の修正を読込")
         load_button.clicked.connect(self.load_values)
         self.upload_check = QCheckBox("保存後に再生成・アップロード")
@@ -9060,11 +9299,12 @@ class TimeshiftTagEditorTab(QWidget):
                 time_item.setFlags(time_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 db_ids = [int(segment["id"]) for segment in segments]
                 time_item.setData(Qt.ItemDataRole.UserRole, db_ids)
+                time_item.setData(Qt.ItemDataRole.UserRole + 1, (float(start), float(end)))
                 self.transcript_table.setItem(row, 0, time_item)
                 self.transcript_table.setItem(
                     row,
                     1,
-                    QTableWidgetItem("\n".join(str(segment["text"] or "") for segment in segments)),
+                    QTableWidgetItem(" ".join(str(segment["text"] or "").strip() for segment in segments)),
                 )
                 self.install_interval_controls(
                     row, float(start), end, db_ids
@@ -9136,25 +9376,60 @@ class TimeshiftTagEditorTab(QWidget):
             self.status_view.append("別の区間を文字起こし中です")
             return
         try:
-            broadcaster_id, lv = self._identity()
-            self.status_view.append(
-                f"{lv}: {self.format_transcript_time(start)} - "
-                f"{self.format_transcript_time(end)} を文字起こし開始"
+            selected_rows = sorted(
+                {index.row() for index in self.transcript_table.selectedIndexes()}
             )
-            self.interval_job = IntervalTranscriptionJob(
-                broadcaster_id, lv, start, end, db_ids, row
-            )
-            self.interval_job.signals.progress.connect(self.status_view.append)
-            self.interval_job.signals.finished.connect(self.on_interval_transcribed)
-            QThreadPool.globalInstance().start(self.interval_job)
+            if len(selected_rows) <= 1 and row in self.interval_multi_selection:
+                selected_rows = list(self.interval_multi_selection)
+            self.interval_multi_selection = []
+            if len(selected_rows) <= 1:
+                self.interval_queue = [(row, start, end, list(db_ids))]
+            else:
+                self.interval_queue = []
+                for selected_row in selected_rows:
+                    time_item = self.transcript_table.item(selected_row, 0)
+                    if time_item is None:
+                        continue
+                    bounds = time_item.data(Qt.ItemDataRole.UserRole + 1)
+                    if not bounds:
+                        continue
+                    selected_ids = time_item.data(Qt.ItemDataRole.UserRole) or []
+                    self.interval_queue.append(
+                        (selected_row, float(bounds[0]), float(bounds[1]), list(selected_ids))
+                    )
+                self.status_view.append(f"選択した{len(self.interval_queue)}区間を順番に文字起こしします")
+            self._start_next_interval_transcription()
         except Exception as exc:
             QMessageBox.critical(self, "区間文字起こし", str(exc))
+
+    def remember_interval_selection(self) -> None:
+        rows = sorted({index.row() for index in self.transcript_table.selectedIndexes()})
+        if len(rows) > 1:
+            self.interval_multi_selection = rows
+
+    def _start_next_interval_transcription(self) -> None:
+        if not self.interval_queue:
+            self.status_view.append("選択区間の文字起こしが完了しました")
+            return
+        broadcaster_id, lv = self._identity()
+        row, start, end, db_ids = self.interval_queue.pop(0)
+        self.status_view.append(
+            f"{lv}: {self.format_transcript_time(start)} - "
+            f"{self.format_transcript_time(end)} を文字起こし開始"
+        )
+        self.interval_job = IntervalTranscriptionJob(
+            broadcaster_id, lv, start, end, db_ids, row
+        )
+        self.interval_job.signals.progress.connect(self.status_view.append)
+        self.interval_job.signals.finished.connect(self.on_interval_transcribed)
+        QThreadPool.globalInstance().start(self.interval_job)
 
     @pyqtSlot(object)
     def on_interval_transcribed(self, result: dict[str, Any]) -> None:
         self.interval_job = None
         if not result.get("ok"):
             self.status_view.append(f"区間文字起こし失敗: {result.get('error')}")
+            self._start_next_interval_transcription()
             return
         row = int(result["row"])
         if row < self.transcript_table.rowCount():
@@ -9167,6 +9442,7 @@ class TimeshiftTagEditorTab(QWidget):
             if time_item is not None:
                 time_item.setData(Qt.ItemDataRole.UserRole, [int(result["db_id"])])
         self.status_view.append("区間文字起こし完了。文字起こし欄へ反映しました")
+        self._start_next_interval_transcription()
 
     def save_and_apply(self) -> None:
         try:
@@ -9365,7 +9641,7 @@ class TimeshiftAcquireJob(QRunnable):
                 ]
                 if not video_paths:
                     raise RuntimeError("取得済み動画が見つかりません")
-                tracker.mark_timeshift_video_download_completed(lv)
+                tracker.mark_timeshift_video_download_completed(lv, video_paths[0])
                 self.signals.progress.emit(f"{prefix}: 動画取得完了をDB記録")
 
                 self.signals.progress.emit(f"{prefix}: コメントDB確認開始")
@@ -9468,16 +9744,35 @@ class TimeshiftTab(QWidget):
         self.step_box = QGroupBox("実行するStep（チェックなしはスキップ）")
         self.step_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         step_layout = QVBoxLayout(self.step_box)
+        self.all_steps_check = QCheckBox("全て選択")
+        step_layout.addWidget(self.all_steps_check)
+        saved_step_state = load_timeshift_step_check_state()
         for offset in (0, 8):
             row = QHBoxLayout()
             for step_name in self.archive_step_names[offset : offset + 8]:
                 check = QCheckBox(step_name.replace("step", ""))
                 check.setToolTip(FINALIZE_LEGACY_STEP_DISPLAY_NAMES[step_name])
-                check.setChecked(step_name not in {"step06_music_generator", "step15_lolipop_uploader"})
+                check.setChecked(
+                    saved_step_state.get(
+                        step_name,
+                        step_name not in {"step06_music_generator", "step15_lolipop_uploader"},
+                    )
+                )
                 self.step_checks[step_name] = check
+                check.stateChanged.connect(
+                    lambda _state, checks=self.step_checks, master=self.all_steps_check: (
+                        save_timeshift_step_check_state(checks),
+                        sync_timeshift_all_steps_check(master, checks),
+                    )
+                )
                 row.addWidget(check)
             row.addStretch(1)
             step_layout.addLayout(row)
+        sync_timeshift_all_steps_check(self.all_steps_check, self.step_checks)
+        self.all_steps_check.toggled.connect(
+            lambda checked, master=self.all_steps_check, checks=self.step_checks:
+            set_all_timeshift_step_checks(master, checks, checked)
+        )
 
         clear_button = QPushButton("URLをクリア")
         clear_button.clicked.connect(self.url_input.clear)
@@ -9639,6 +9934,102 @@ class LogTab(QWidget):
         super().closeEvent(event)
 
 
+class TestTab(QWidget):
+    TEST_FILES = [
+        ("LV番号の正規化", "tests/test_niconico_ids.py"),
+        ("録画ファイルの順序・形式選択・重複排除", "tests/test_recording_files.py"),
+        ("保存ディレクトリ・設定既定値", "tests/test_paths_and_config.py"),
+        ("タグ変換", "tests/test_tags.py"),
+        ("コメント時刻と動画時刻", "tests/test_timeline.py"),
+        ("アーカイブURL生成", "tests/test_archive_urls.py"),
+    ]
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.process: QProcess | None = None
+        self.test_list = QListWidget()
+        self.test_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        for label, path in self.TEST_FILES:
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setSelected(True)
+            self.test_list.addItem(item)
+
+        self.status_label = QLabel("実行する試験を選択してください")
+        self.output = QTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+
+        select_all = QPushButton("全選択")
+        select_all.clicked.connect(lambda: self.set_all_selected(True))
+        clear_all = QPushButton("全解除")
+        clear_all.clicked.connect(lambda: self.set_all_selected(False))
+        self.run_button = QPushButton("選択したテストを実行")
+        self.run_button.clicked.connect(self.run_tests)
+        self.stop_button = QPushButton("停止")
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self.stop_tests)
+
+        controls = QHBoxLayout()
+        controls.addWidget(select_all)
+        controls.addWidget(clear_all)
+        controls.addWidget(self.run_button)
+        controls.addWidget(self.stop_button)
+        controls.addStretch(1)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("GUIを起動せずに確認できる高速テスト"))
+        layout.addWidget(self.test_list)
+        layout.addLayout(controls)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.output, 1)
+
+    def set_all_selected(self, selected: bool) -> None:
+        for index in range(self.test_list.count()):
+            self.test_list.item(index).setSelected(selected)
+
+    def run_tests(self) -> None:
+        paths = [
+            str(item.data(Qt.ItemDataRole.UserRole))
+            for item in self.test_list.selectedItems()
+        ]
+        if not paths:
+            self.status_label.setText("テストが選択されていません")
+            return
+        self.output.clear()
+        self.status_label.setText(f"実行中: {len(paths)}項目")
+        self.run_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        process = QProcess(self)
+        process.setWorkingDirectory(str(APP_ROOT))
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.readyReadStandardOutput.connect(self.read_output)
+        process.finished.connect(self.tests_finished)
+        self.process = process
+        process.start(sys.executable, ["-m", "pytest", "-q", *paths])
+
+    def read_output(self) -> None:
+        if not self.process:
+            return
+        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        if text:
+            self.output.moveCursor(QTextCursor.MoveOperation.End)
+            self.output.insertPlainText(text)
+            self.output.ensureCursorVisible()
+
+    def tests_finished(self, exit_code: int, _status) -> None:
+        self.read_output()
+        self.status_label.setText("成功" if exit_code == 0 else f"失敗: exit={exit_code}")
+        self.run_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.process = None
+
+    def stop_tests(self) -> None:
+        if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.kill()
+            self.status_label.setText("停止しました")
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -9676,6 +10067,8 @@ class MainWindow(QMainWindow):
         self.connect_ui_state_autosave()
         self.settings_tab = SettingsTab()
         tabs.addTab(self.settings_tab, "設定")
+        self.test_tab = TestTab()
+        tabs.addTab(self.test_tab, "テスト")
         self.log_tab = LogTab()
         tabs.addTab(self.log_tab, "ログ")
         self.setCentralWidget(tabs)
