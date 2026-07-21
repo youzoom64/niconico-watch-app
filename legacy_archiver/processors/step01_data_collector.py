@@ -190,9 +190,10 @@ def parse_embedded_data_from_html(html_content):
     """watchページのscript#embedded-dataから放送メタを取り出す"""
     if not html_content:
         return {}
+    json_ld_counts = parse_json_ld_counts(html_content)
     match = re.search(r'<script[^>]*id=["\']embedded-data["\'][^>]*data-props=["\']([^"\']*)["\']', html_content)
     if not match:
-        return {}
+        return json_ld_counts
     try:
         props = json.loads(html_lib.unescape(match.group(1)))
     except Exception as e:
@@ -215,12 +216,46 @@ def parse_embedded_data_from_html(html_content):
         "open_time": str(open_time or ""),
         "start_time": str(begin_time or ""),
         "end_time": str(end_time or ""),
-        "watch_count": str(statistics.get("watchCount") or ""),
-        "comment_count": str(statistics.get("commentCount") or ""),
+        "watch_count": str(statistics.get("watchCount") or json_ld_counts.get("watch_count") or ""),
+        "comment_count": str(statistics.get("commentCount") or json_ld_counts.get("comment_count") or ""),
         "owner_id": str(supplier.get("programProviderId") or ""),
         "owner_name": str(supplier.get("name") or ""),
         "provider_type": normalize_provider_type(program.get("providerType") or program.get("visualProviderType") or ""),
     }
+
+
+def parse_json_ld_counts(html_content):
+    """JSON-LDのVideoObjectから来場者数とコメント数を補完する。"""
+    result = {}
+    scripts = re.findall(
+        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html_content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for script in scripts:
+        try:
+            payload = json.loads(html_lib.unescape(script).strip())
+        except Exception:
+            continue
+        entries = payload if isinstance(payload, list) else [payload]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("commentCount") not in (None, ""):
+                result["comment_count"] = str(entry["commentCount"])
+            statistics = entry.get("interactionStatistic") or []
+            if isinstance(statistics, dict):
+                statistics = [statistics]
+            for statistic in statistics:
+                if not isinstance(statistic, dict):
+                    continue
+                interaction_type = statistic.get("interactionType") or {}
+                action_type = interaction_type.get("@type") if isinstance(interaction_type, dict) else interaction_type
+                if action_type == "WatchAction" and statistic.get("userInteractionCount") not in (None, ""):
+                    result["watch_count"] = str(statistic["userInteractionCount"])
+            if result.get("watch_count"):
+                return result
+    return result
 
 
 def fetch_program_history_item(lv_value, provider_id, provider_type="user"):
