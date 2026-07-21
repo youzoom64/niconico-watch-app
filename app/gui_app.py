@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
@@ -2359,6 +2360,21 @@ class SpecialUserEditorDialog(QDialog):
         self.max_reactions.setValue(1)
         self.refresh_ai_model_combo(self.analysis_engine, self.analysis_model)
         self.refresh_ai_model_combo(self.reaction_engine, self.reaction_model)
+        for field in (
+            self.label_input,
+            self.analysis_engine,
+            self.analysis_model,
+            self.analysis_effort,
+            self.analysis_session_id,
+            self.analysis_api_key,
+            self.reaction_engine,
+            self.reaction_model,
+            self.reaction_effort,
+            self.reaction_session_id,
+            self.reaction_api_key,
+        ):
+            field.setMinimumWidth(0)
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.basic_reaction_enabled = QCheckBox("基本反応設定を使う")
         self.basic_reaction_type = NoWheelComboBox()
@@ -2454,16 +2470,18 @@ class SpecialUserEditorDialog(QDialog):
         reaction_layout.addWidget(QLabel("AI反応APIキー"))
         reaction_layout.addWidget(self.reaction_api_key)
         reaction_numbers = QWidget()
-        reaction_numbers_layout = QHBoxLayout(reaction_numbers)
+        reaction_numbers_layout = QGridLayout(reaction_numbers)
         reaction_numbers_layout.setContentsMargins(0, 0, 0, 0)
-        reaction_numbers_layout.addWidget(QLabel("最大文字数"))
-        reaction_numbers_layout.addWidget(self.reaction_max_chars)
-        reaction_numbers_layout.addWidget(QLabel("分割送信遅延"))
-        reaction_numbers_layout.addWidget(self.reaction_split_delay)
-        reaction_numbers_layout.addWidget(QLabel("反応遅延"))
-        reaction_numbers_layout.addWidget(self.reaction_delay_seconds)
-        reaction_numbers_layout.addWidget(QLabel("最大反応回数"))
-        reaction_numbers_layout.addWidget(self.max_reactions)
+        reaction_numbers_layout.addWidget(QLabel("最大文字数"), 0, 0)
+        reaction_numbers_layout.addWidget(self.reaction_max_chars, 0, 1)
+        reaction_numbers_layout.addWidget(QLabel("分割送信遅延"), 0, 2)
+        reaction_numbers_layout.addWidget(self.reaction_split_delay, 0, 3)
+        reaction_numbers_layout.addWidget(QLabel("反応遅延"), 1, 0)
+        reaction_numbers_layout.addWidget(self.reaction_delay_seconds, 1, 1)
+        reaction_numbers_layout.addWidget(QLabel("最大反応回数"), 1, 2)
+        reaction_numbers_layout.addWidget(self.max_reactions, 1, 3)
+        reaction_numbers_layout.setColumnStretch(1, 1)
+        reaction_numbers_layout.setColumnStretch(3, 1)
         reaction_layout.addWidget(reaction_numbers)
 
         basic_reaction = QGroupBox("このユーザーに対する基本反応設定")
@@ -2509,12 +2527,14 @@ class SpecialUserEditorDialog(QDialog):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setWidget(left)
         splitter.addWidget(left_scroll)
         splitter.addWidget(right)
-        splitter.setSizes([620, 420])
+        splitter.setSizes([420, 480])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter, 1)
         layout.addWidget(buttons)
         self.load()
@@ -9123,9 +9143,9 @@ class TimeshiftTagEditorTab(QWidget):
         self.tags_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.tags_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tags_table.setMaximumHeight(170)
-        self.transcript_table = QTableWidget(0, 4)
+        self.transcript_table = QTableWidget(0, 2)
         self.transcript_table.setHorizontalHeaderLabels(
-            ["時間", "文字起こし（文字を直接修正）", "再生操作", "区間再処理"]
+            ["時間", "文字起こし（文字を直接修正）"]
         )
         self.transcript_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive
@@ -9134,8 +9154,6 @@ class TimeshiftTagEditorTab(QWidget):
         self.transcript_table.horizontalHeader().setMinimumSectionSize(80)
         self.transcript_table.setColumnWidth(0, 220)
         self.transcript_table.setColumnWidth(1, 900)
-        self.transcript_table.setColumnWidth(2, 150)
-        self.transcript_table.setColumnWidth(3, 190)
         self.transcript_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
@@ -9148,7 +9166,14 @@ class TimeshiftTagEditorTab(QWidget):
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.transcript_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.transcript_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.transcript_table.itemSelectionChanged.connect(self.remember_interval_selection)
+        self.play_selected_button = QPushButton("選択区間を再生")
+        self.play_selected_button.clicked.connect(self.play_selected_intervals)
+        self.stop_selected_button = QPushButton("停止")
+        self.stop_selected_button.clicked.connect(self.stop_interval_audio)
+        self.transcribe_selected_button = QPushButton("選択区間を文字起こし")
+        self.transcribe_selected_button.clicked.connect(self.transcribe_selected_intervals)
         load_button = QPushButton("現在の修正を読込")
         load_button.clicked.connect(self.load_values)
         self.upload_check = QCheckBox("保存後に再生成・アップロード")
@@ -9170,6 +9195,13 @@ class TimeshiftTagEditorTab(QWidget):
         url_row.addWidget(self.load_url_button)
         layout.addLayout(url_row)
         layout.addWidget(self.tags_table)
+        interval_controls = QHBoxLayout()
+        interval_controls.addWidget(QLabel("文字起こし行を選択して操作"))
+        interval_controls.addWidget(self.play_selected_button)
+        interval_controls.addWidget(self.stop_selected_button)
+        interval_controls.addWidget(self.transcribe_selected_button)
+        interval_controls.addStretch(1)
+        layout.addLayout(interval_controls)
         layout.addWidget(self.transcript_table, 1)
         buttons = QHBoxLayout()
         buttons.addWidget(load_button)
@@ -9306,9 +9338,6 @@ class TimeshiftTagEditorTab(QWidget):
                     1,
                     QTableWidgetItem(" ".join(str(segment["text"] or "").strip() for segment in segments)),
                 )
-                self.install_interval_controls(
-                    row, float(start), end, db_ids
-                )
                 if not segments:
                     empty_ranges += 1
             self.status_view.append(
@@ -9318,27 +9347,39 @@ class TimeshiftTagEditorTab(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "タグ修正", str(exc))
 
-    def install_interval_controls(
-        self, row: int, start: float, end: float, db_ids: list[int]
-    ) -> None:
-        playback = QWidget()
-        playback_layout = QHBoxLayout(playback)
-        playback_layout.setContentsMargins(0, 0, 0, 0)
-        play_button = QPushButton("再生")
-        stop_button = QPushButton("停止")
-        play_button.clicked.connect(
-            lambda _checked=False, start=start, end=end: self.play_interval(start, end)
-        )
-        stop_button.clicked.connect(lambda _checked=False: self.stop_interval_audio())
-        playback_layout.addWidget(play_button)
-        playback_layout.addWidget(stop_button)
-        self.transcript_table.setCellWidget(row, 2, playback)
-        button = QPushButton("この区間を文字起こし")
-        button.clicked.connect(
-            lambda _checked=False, row=row, start=start, end=end, db_ids=db_ids:
-            self.transcribe_interval(row, start, end, db_ids)
-        )
-        self.transcript_table.setCellWidget(row, 3, button)
+    def selected_interval_specs(self) -> list[tuple[int, float, float, list[int]]]:
+        rows = sorted({index.row() for index in self.transcript_table.selectedIndexes()})
+        if not rows and self.transcript_table.currentRow() >= 0:
+            rows = [self.transcript_table.currentRow()]
+        specs: list[tuple[int, float, float, list[int]]] = []
+        for row in rows:
+            time_item = self.transcript_table.item(row, 0)
+            if time_item is None:
+                continue
+            bounds = time_item.data(Qt.ItemDataRole.UserRole + 1)
+            if not bounds:
+                continue
+            db_ids = time_item.data(Qt.ItemDataRole.UserRole) or []
+            specs.append((row, float(bounds[0]), float(bounds[1]), list(db_ids)))
+        return specs
+
+    def play_selected_intervals(self) -> None:
+        specs = self.selected_interval_specs()
+        if not specs:
+            self.status_view.append("再生する文字起こし行を選択してください")
+            return
+        self.play_interval(min(spec[1] for spec in specs), max(spec[2] for spec in specs))
+
+    def transcribe_selected_intervals(self) -> None:
+        if self.interval_job is not None:
+            self.status_view.append("別の区間を文字起こし中です")
+            return
+        self.interval_queue = self.selected_interval_specs()
+        if not self.interval_queue:
+            self.status_view.append("文字起こしする行を選択してください")
+            return
+        self.status_view.append(f"選択した{len(self.interval_queue)}区間を順番に文字起こしします")
+        self._start_next_interval_transcription()
 
     def play_interval(self, start: float, end: float) -> None:
         try:
@@ -9473,6 +9514,13 @@ class TimeshiftTagEditorTab(QWidget):
             temporary.replace(path)
             changed_segments: list[tuple[int, str]] = []
             with tracker.connect() as conn:
+                next_segment_index = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(segment_index), -1) + 1 "
+                        "FROM archive_transcript_segments WHERE lv = ?",
+                        (lv,),
+                    ).fetchone()[0]
+                )
                 for row in range(self.transcript_table.rowCount()):
                     time_item = self.transcript_table.item(row, 0)
                     text_item = self.transcript_table.item(row, 1)
@@ -9483,6 +9531,38 @@ class TimeshiftTagEditorTab(QWidget):
                         db_id_values = [db_id_values]
                     db_ids = [int(value) for value in db_id_values if value is not None]
                     if not db_ids:
+                        new_text = text_item.text().strip()
+                        bounds = time_item.data(Qt.ItemDataRole.UserRole + 1)
+                        if not new_text or not bounds:
+                            continue
+                        start_seconds = float(bounds[0])
+                        end_seconds = float(bounds[1])
+                        raw = {
+                            "start": start_seconds,
+                            "end": end_seconds,
+                            "text": new_text,
+                            "source": "manual_edit",
+                        }
+                        cursor = conn.execute(
+                            """
+                            INSERT INTO archive_transcript_segments
+                                (lv, segment_index, start_seconds, end_seconds, text,
+                                 confidence, speaker, source_audio_path, model, raw_json, created_at)
+                            VALUES (?, ?, ?, ?, ?, NULL, '', '', 'manual_edit', ?, ?)
+                            """,
+                            (
+                                lv,
+                                next_segment_index,
+                                start_seconds,
+                                end_seconds,
+                                new_text,
+                                json.dumps(raw, ensure_ascii=False),
+                                tracker.now_micro(),
+                            ),
+                        )
+                        next_segment_index += 1
+                        time_item.setData(Qt.ItemDataRole.UserRole, [int(cursor.lastrowid)])
+                        changed_segments.append((row, new_text))
                         continue
                     new_text = text_item.text().strip()
                     placeholders = ",".join("?" for _ in db_ids)
