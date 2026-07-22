@@ -45,6 +45,9 @@ def process(pipeline_data):
     try:
         lv_value = pipeline_data['lv_value']
         config = pipeline_data['config']
+        display_features = config.get("display_features", {})
+        timeline_interval = max(10, int(display_features.get("timeline_interval_seconds", 10) or 10))
+        transcript_joiner = "<br>" if display_features.get("transcript_segment_separator") == "newline" else " "
         
         print(f"Step12 完全版開始: {lv_value}")
         
@@ -78,7 +81,14 @@ def process(pipeline_data):
         recording_segment_timeline = pipeline_data.get('recording_segment_timeline') or {}
         
         # 3. 各種データ準備
-        timeline_data = create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_data)
+        timeline_data = create_timeline_blocks(
+            transcript_data,
+            comments_data,
+            lv_value,
+            broadcast_data,
+            timeline_interval=timeline_interval,
+            transcript_joiner=transcript_joiner,
+        )
         timeline_data['recording_segment_timeline'] = recording_segment_timeline
         timeline_data['comments_fetch_failed'] = bool(pipeline_data.get('comments_fetch_failed'))
         transcript_blocks = timeline_data['transcript_blocks']
@@ -135,7 +145,14 @@ def load_json_file(directory, filename):
             return json.load(f)
     return {}
 
-def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_data):
+def create_timeline_blocks(
+    transcript_data,
+    comments_data,
+    lv_value,
+    broadcast_data,
+    timeline_interval=10,
+    transcript_joiner=" ",
+):
     """Build every ten-second block on the canonical broadcast-wide clock."""
     try:
         # The finalized segment/MP3 timeline is authoritative.  elapsed_time is
@@ -163,7 +180,7 @@ def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_d
         all_time_blocks = []
         # elapsed_time は終端なので、60秒放送なら 0-10 ... 50-60 までを作る。
         # 60-70 の存在しないブロックを作ると 60.jpg を参照して画像切れになる。
-        for seconds in range(0, max_seconds, 10):
+        for seconds in range(0, max_seconds, timeline_interval):
             all_time_blocks.append(seconds)
         
         print(f"DEBUGLOG: 生成する全タイムブロック数: {len(all_time_blocks)} (0秒〜{max_seconds}秒)")
@@ -173,8 +190,8 @@ def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_d
         for block_time in all_time_blocks:
             transcript_blocks[block_time] = {
                 'start_seconds': block_time,
-                'end_seconds': block_time + 10,
-                'time_range': format_time_range(block_time, block_time + 10),
+                'end_seconds': block_time + timeline_interval,
+                'time_range': format_time_range(block_time, block_time + timeline_interval),
                 'transcript': '',  # 空で初期化
                 'speaker': '',
                 'transcripts': [],
@@ -189,8 +206,8 @@ def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_d
         for block_time in all_time_blocks:
             comment_blocks[block_time] = {
                 'start_seconds': block_time,
-                'end_seconds': block_time + 10,
-                'time_range': format_time_range(block_time, block_time + 10),
+                'end_seconds': block_time + timeline_interval,
+                'time_range': format_time_range(block_time, block_time + timeline_interval),
                 'comments': []  # 空で初期化
             }
         
@@ -203,7 +220,7 @@ def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_d
         for segment in transcripts:
             start_seconds = float(segment.get('start', segment.get('start_seconds', segment.get('timestamp', 0))) or 0)
             timestamp = int(start_seconds)
-            timeline_block = int(math.floor(start_seconds / 10.0) * 10)
+            timeline_block = int(math.floor(start_seconds / float(timeline_interval)) * timeline_interval)
             
             # elapsed_time範囲内のデータのみ処理
             if timeline_block in transcript_blocks:
@@ -219,7 +236,7 @@ def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_d
                     'negative_score': round(segment.get('negative_score', 0), 3),
                 }
                 transcript_blocks[timeline_block]['transcripts'].append(transcript_item)
-                transcript_blocks[timeline_block]['transcript'] = '<br>'.join(
+                transcript_blocks[timeline_block]['transcript'] = transcript_joiner.join(
                     item['text'] for item in transcript_blocks[timeline_block]['transcripts'] if item.get('text')
                 )
                 speakers = [
@@ -253,8 +270,8 @@ def create_timeline_blocks(transcript_data, comments_data, lv_value, broadcast_d
         print(f"DEBUGLOG: コメントデータ: {len(comments)}件")
         
         for comment in comments:
-            timeline_block = comment.get('timeline_block', 0)
             comment_seconds = float(comment.get('broadcast_seconds', 0) or 0)
+            timeline_block = int(math.floor(comment_seconds / float(timeline_interval)) * timeline_interval)
             
             # elapsed_time範囲内のデータのみ処理
             if timeline_block in comment_blocks:
@@ -678,7 +695,7 @@ def render_registered_person_names(text, registered_person_names=None):
     return ''.join(parts)
 
 
-def render_transcript_lines(block, registered_person_names=None):
+def render_transcript_lines(block, registered_person_names=None, segment_separator="newline"):
     items = block.get('transcripts') or []
     if not items:
         transcript = str(block.get("transcript") or "").strip()
@@ -692,7 +709,7 @@ def render_transcript_lines(block, registered_person_names=None):
         if not texts:
             return ""
         return '<p class="comment transcript-comment">{}</p>'.format(
-            '<br>'.join(
+            ('<br>' if segment_separator == "newline" else ' ').join(
                 render_registered_person_names(text, registered_person_names)
                 for text in texts
             )
@@ -723,14 +740,15 @@ def render_transcript_lines(block, registered_person_names=None):
     return hidden_comment + '<div class="transcript-lines">' + ''.join(lines) + '</div>'
 
 
-def render_transcript_time_block(block, registered_person_names=None):
+def render_transcript_time_block(block, registered_person_names=None, segment_separator="newline"):
     """Render one transcript row for the virtual timeline payload."""
     start_seconds = int(block.get('start_seconds', 0) or 0)
-    transcript_html = render_transcript_lines(block, registered_person_names)
+    end_seconds = int(block.get('end_seconds', start_seconds + 10) or (start_seconds + 10))
+    transcript_html = render_transcript_lines(block, registered_person_names, segment_separator)
     return (
         f'<div class="time-block" id="time_block_{start_seconds}" '
         f'style="position: relative; height: {DEFAULT_TIMELINE_BLOCK_HEIGHT}px;">'
-        f'<strong>{block.get("time_range") or format_time_range(start_seconds, start_seconds + 10)}</strong>'
+        f'<strong>{block.get("time_range") or format_time_range(start_seconds, end_seconds)}</strong>'
         f'{transcript_html}'
         '<div class="score-container">'
         f'<span class="center-score">center:{block.get("center_score", 0)}</span>'
@@ -774,10 +792,11 @@ def render_comment_time_block(time_second, comment_block=None, comments_fetch_fa
             '<p class="comment-empty" style="color: #999; font-style: italic; '
             f'text-align: center; margin-top: 50px;">{empty_text}</p>'
         )
+    end_second = int((comment_block or {}).get('end_seconds', time_second + 10) or (time_second + 10))
     return (
         f'<div class="time-block" id="time_block_{time_second}" '
         f'style="height: {DEFAULT_TIMELINE_BLOCK_HEIGHT}px;">'
-        f'<strong>{format_time_range(time_second, time_second + 10)}</strong>'
+        f'<strong>{format_time_range(time_second, end_second)}</strong>'
         f'<div class="comment-list">{"".join(comment_html)}</div>'
         '</div>'
     )
@@ -788,6 +807,7 @@ def build_virtual_timeline_payload(
     comment_blocks,
     registered_person_names=None,
     comments_fetch_failed=False,
+    segment_separator="newline",
 ):
     """Build complete row HTML while keeping it outside the initial live DOM."""
     ordered_transcripts = sorted(
@@ -807,7 +827,7 @@ def build_virtual_timeline_payload(
     })
     return {
         'timeline1': [
-            render_transcript_time_block(block, registered_person_names)
+            render_transcript_time_block(block, registered_person_names, segment_separator)
             for block in ordered_transcripts
         ],
         'timeline2': [
@@ -841,7 +861,7 @@ def render_virtual_timeline_host(timeline_id):
     )
 
 
-def build_virtual_timeline_script(lv_value):
+def build_virtual_timeline_script(lv_value, timeline_interval=10):
     """Return the browser-side bounded-DOM timeline renderer."""
     script = r'''
     <script>
@@ -930,9 +950,9 @@ def build_virtual_timeline_script(lv_value):
             if (total <= 0) return null;
             const index = Math.max(
                 0,
-                Math.min(total - 1, Math.floor(Number(second || 0) / 10))
+                Math.min(total - 1, Math.floor(Number(second || 0) / __TIMELINE_INTERVAL__))
             );
-            const blockSecond = index * 10;
+            const blockSecond = index * __TIMELINE_INTERVAL__;
             render(index - bufferBefore, false);
             const selector = '#timeline1 .time-block[id="time_block_' + blockSecond + '"]';
             const target = document.querySelector(selector);
@@ -957,7 +977,7 @@ def build_virtual_timeline_script(lv_value):
         function transcriptText(second) {
             const rows = timelineData.timeline1 || [];
             if (!rows.length) return "";
-            const index = Math.max(0, Math.min(rows.length - 1, Math.floor(Number(second || 0) / 10)));
+            const index = Math.max(0, Math.min(rows.length - 1, Math.floor(Number(second || 0) / __TIMELINE_INTERVAL__)));
             const template = document.createElement("template");
             template.innerHTML = rows[index] || "";
             const comment = template.content.querySelector(".comment, .transcript-lines");
@@ -995,14 +1015,14 @@ def build_virtual_timeline_script(lv_value):
         window.NicoVirtualTimeline = {
             renderSecond,
             renderIndex(index, scrollIntoView) {
-                return renderSecond((Number(index) || 0) * 10, scrollIntoView);
+                return renderSecond((Number(index) || 0) * __TIMELINE_INTERVAL__, scrollIntoView);
             },
             setBlockHeight,
             getBlockHeight() {
                 return blockHeight;
             },
             getMaxSecond() {
-                return Math.max(0, (total - 1) * 10);
+                return Math.max(0, (total - 1) * __TIMELINE_INTERVAL__);
             },
             transcriptText,
             search,
@@ -1061,6 +1081,7 @@ def build_virtual_timeline_script(lv_value):
         .replace('__BUFFER_BEFORE__', str(VIRTUAL_TIMELINE_BUFFER_BEFORE))
         .replace('__BLOCK_GAP__', str(TIMELINE_BLOCK_VERTICAL_GAP))
         .replace('__BLOCK_HEIGHT__', str(DEFAULT_TIMELINE_BLOCK_HEIGHT))
+        .replace('__TIMELINE_INTERVAL__', str(max(10, int(timeline_interval or 10))))
         .replace('__LV_VALUE__', json.dumps(str(lv_value), ensure_ascii=False))
     )
 
@@ -1089,6 +1110,7 @@ def generate_complete_html(
         image_data = broadcast_data.get('image_generation', {})
         timeline_audio_src = select_timeline_audio_source(broadcast_dir, lv_value)
         display_features = config.get('display_features', {})
+        timeline_interval = max(10, int(display_features.get("timeline_interval_seconds", 10) or 10))
         show_emotion_scores = display_features.get('enable_emotion_scores', True)
         show_word_ranking = display_features.get('enable_word_ranking', True)
         show_thumbnails = display_features.get('enable_thumbnails', True)
@@ -1985,6 +2007,7 @@ def generate_complete_html(
             comment_blocks,
             registered_person_names,
             bool(timeline_data.get('comments_fetch_failed')),
+            display_features.get("transcript_segment_separator", "newline"),
         )
         virtual_timeline_json = serialize_json_for_html_script(
             virtual_timeline_payload
@@ -2095,7 +2118,7 @@ def generate_complete_html(
         """)
 
         # JavaScript
-        html_parts.append(build_virtual_timeline_script(lv_value))
+        html_parts.append(build_virtual_timeline_script(lv_value, timeline_interval))
         html_parts.append(f"""
     <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4"></script>
     <script>
@@ -2144,7 +2167,7 @@ def generate_complete_html(
         document.addEventListener("nico-virtual-window-rendered", function (event) {{
             setThumbnailSize(thumbnailSizeRange?.value || thumbnailBaseWidth);
             if (portraitSeekbar && !portraitSeekActive && event.detail) {{
-                const visibleSecond = Math.max(0, Number(event.detail.start || 0) * 10);
+                const visibleSecond = Math.max(0, Number(event.detail.start || 0) * {timeline_interval});
                 portraitSeekbar.value = String(
                     Math.min(Number(portraitSeekbar.max) || visibleSecond, visibleSecond)
                 );
@@ -2155,7 +2178,7 @@ def generate_complete_html(
         function syncCommentFlow() {{
             if (!audioPlayer) return;
             const second = audioPlayer.currentTime || 0;
-            const blockSecond = Math.floor(second / 10) * 10;
+            const blockSecond = Math.floor(second / {timeline_interval}) * {timeline_interval};
             const block = document.querySelector(
                 `#timeline2 .time-block[id="time_block_${{blockSecond}}"]`
             );
@@ -2281,7 +2304,7 @@ def generate_complete_html(
         
         function scrollToCurrentTimeBlock() {{
             if (!audioPlayer) return;
-            const currentBlock = Math.floor(audioPlayer.currentTime / 10) * 10;
+            const currentBlock = Math.floor(audioPlayer.currentTime / {timeline_interval}) * {timeline_interval};
             const timeBlockId = `time_block_${{currentBlock}}`;
             window.NicoVirtualTimeline?.renderSecond(currentBlock, false);
             const timeBlock1 = document.querySelector(
@@ -2378,7 +2401,7 @@ def generate_complete_html(
         var currentEmotionSegments = segments;
         
         function createTooltipText(dataIndex) {{
-            var timeBlockID = Math.floor(Number(currentEmotionSegments[dataIndex] || 0) / 10) * 10;
+            var timeBlockID = Math.floor(Number(currentEmotionSegments[dataIndex] || 0) / {timeline_interval}) * {timeline_interval};
             if (window.NicoVirtualTimeline?.transcriptText) {{
                 return window.NicoVirtualTimeline.transcriptText(timeBlockID);
             }}
@@ -2393,7 +2416,7 @@ def generate_complete_html(
         }}
         
         function jumpToTimeBlock(dataIndex) {{
-            var timeBlockID = Math.floor(Number(currentEmotionSegments[dataIndex] || 0) / 10) * 10;
+            var timeBlockID = Math.floor(Number(currentEmotionSegments[dataIndex] || 0) / {timeline_interval}) * {timeline_interval};
             if (window.NicoVirtualTimeline) {{
                 window.NicoVirtualTimeline.renderSecond(timeBlockID, true);
                 return;
@@ -2577,7 +2600,7 @@ def generate_complete_html(
         print(f"完全HTML生成エラー: {str(e)}")
         import traceback
         traceback.print_exc()
-        return "<html><body>HTML生成エラー</body></html>"
+        raise
 
 def format_time_range(start_seconds, end_seconds):
     """時間範囲を表記"""

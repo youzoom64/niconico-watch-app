@@ -14,6 +14,7 @@ for /d %%D in ("%~dp0..\SlNicoLiveRec*") do if exist "%%~fD\binary\ffmpeg.exe" s
 
 if not exist ".setup_complete" goto :setup
 if not exist ".venv\Scripts\python.exe" goto :setup
+if not exist ".venv-whisperx\Scripts\python.exe" goto :setup
 if not defined FFMPEG_EXE goto :setup
 goto :launch
 

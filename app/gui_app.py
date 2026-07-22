@@ -1403,36 +1403,54 @@ class ReactionPostJob(QRunnable):
                     prompt += f"{skip_prompt}\n"
                 prompt += '出力は {"reply":"反応文"} というJSONオブジェクト1個だけにしてください。'
                 session_id = ""
+                session_scope = "special_user"
                 with REACTION_AI_SESSION_LOCK:
                     if provider == "codex":
                         with tracker.connect() as conn:
                             session_row = conn.execute(
-                                "SELECT reaction_session_id FROM special_users WHERE user_id = ?",
-                                (user_id,),
+                                """
+                                SELECT reaction_session_id
+                                FROM special_user_broadcasters
+                                WHERE user_id = ? AND broadcaster_id = ?
+                                """,
+                                (user_id, broadcaster_id),
                             ).fetchone()
-                        session_id = str(session_row["reaction_session_id"] or "").strip() if session_row else ""
-                    result = run_codex_exec(
-                        prompt,
-                        config=ai_config,
-                        session_id=session_id,
-                    )
-                    if not result.ok and session_id and provider == "codex":
-                        append_app_log(
-                            f"AI反応 resume失敗のため新規セッションへ切替: user={user_id}",
-                            "WARN",
-                        )
-                        result = run_codex_exec(prompt, config=ai_config)
-                    if result.ok and result.session_id and provider == "codex":
-                        with tracker.connect() as conn:
-                            conn.execute(
-                                "UPDATE special_users SET reaction_session_id = ?, updated_at = ? WHERE user_id = ?",
-                                (result.session_id, tracker.now(), user_id),
+                            if session_row:
+                                session_scope = "broadcaster"
+                            else:
+                                session_row = conn.execute(
+                                    "SELECT reaction_session_id FROM special_users WHERE user_id = ?",
+                                    (user_id,),
+                                ).fetchone()
+                            session_id = str(session_row["reaction_session_id"] or "").strip() if session_row else ""
+                        result = run_codex_exec(prompt, config=ai_config, session_id=session_id)
+                        if not result.ok and session_id:
+                            append_app_log(
+                                f"AI反応 resume失敗のため新規セッションへ切替: user={user_id}",
+                                "WARN",
                             )
-                            conn.commit()
-                        append_app_log(
-                            f"AI反応Codexセッション: user={user_id} session={result.session_id} mode={'resume' if session_id else 'new'}",
-                            "INFO",
-                        )
+                            result = run_codex_exec(prompt, config=ai_config)
+                        if result.ok and result.session_id:
+                            with tracker.connect() as conn:
+                                if session_scope == "broadcaster":
+                                    conn.execute(
+                                        """
+                                        UPDATE special_user_broadcasters
+                                        SET reaction_session_id = ?, updated_at = ?
+                                        WHERE user_id = ? AND broadcaster_id = ?
+                                        """,
+                                        (result.session_id, tracker.now(), user_id, broadcaster_id),
+                                    )
+                                else:
+                                    conn.execute(
+                                        "UPDATE special_users SET reaction_session_id = ?, updated_at = ? WHERE user_id = ?",
+                                        (result.session_id, tracker.now(), user_id),
+                                    )
+                                conn.commit()
+                            append_app_log(
+                                f"AI反応Codexセッション: user={user_id} session={result.session_id} mode={'resume' if session_id else 'new'}",
+                                "INFO",
+                            )
                 if not result.ok:
                     self.signals.failed.emit(user_id, f"AI反応生成失敗: returncode={result.returncode}")
                     return
@@ -2558,7 +2576,7 @@ class SpecialUserEditorDialog(QDialog):
             ).fetchone()
             broadcasters = conn.execute(
                 """
-                SELECT id, broadcaster_id, broadcaster_name, enabled,
+                SELECT id, broadcaster_id, broadcaster_name, enabled, reaction_session_id,
                        basic_reaction_enabled, basic_reaction_type,
                        basic_reaction_messages, basic_reaction_prompt,
                        max_reactions, reaction_delay_seconds
@@ -2820,9 +2838,9 @@ class SpecialUserEditorDialog(QDialog):
                         (user_id, broadcaster_id, broadcaster_name, enabled,
                          basic_reaction_enabled, basic_reaction_type,
                          basic_reaction_messages, basic_reaction_prompt,
-                         max_reactions, reaction_delay_seconds,
+                         max_reactions, reaction_delay_seconds, reaction_session_id,
                          created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id, broadcaster_id) DO UPDATE SET
                         broadcaster_name = excluded.broadcaster_name,
                         enabled = excluded.enabled,
@@ -2832,6 +2850,7 @@ class SpecialUserEditorDialog(QDialog):
                         basic_reaction_prompt = excluded.basic_reaction_prompt,
                         max_reactions = excluded.max_reactions,
                         reaction_delay_seconds = excluded.reaction_delay_seconds,
+                        reaction_session_id = excluded.reaction_session_id,
                         updated_at = excluded.updated_at
                     """,
                     (
@@ -2845,6 +2864,7 @@ class SpecialUserEditorDialog(QDialog):
                         row.get("basic_reaction_prompt"),
                         int(row.get("max_reactions") or 1),
                         float(row.get("reaction_delay_seconds") or 0.0),
+                        str(row.get("reaction_session_id") or "").strip(),
                         current_time,
                         current_time,
                     ),
@@ -3089,6 +3109,8 @@ class BroadcasterEditorDialog(QDialog):
         self.reaction_delay.setRange(0, 999)
         self.reaction_delay.setDecimals(1)
         self.reaction_delay.setValue(float(broadcaster.get("reaction_delay_seconds") or 0.0))
+        self.reaction_session_id = QLineEdit(str(broadcaster.get("reaction_session_id") or ""))
+        self.reaction_session_id.setPlaceholderText("この配信者専用のCodex resumeセッションID")
 
         self.trigger_name_input = QLineEdit()
         self.trigger_name_input.setPlaceholderText("トリガー名")
@@ -3152,6 +3174,8 @@ class BroadcasterEditorDialog(QDialog):
         numbers_layout.addWidget(self.reaction_delay)
         numbers_layout.addStretch(1)
         reaction_layout.addWidget(numbers)
+        reaction_layout.addWidget(QLabel("Codex resumeセッションID"))
+        reaction_layout.addWidget(self.reaction_session_id)
 
         left_layout.addWidget(basic)
         left_layout.addWidget(reaction, 1)
@@ -3193,6 +3217,7 @@ class BroadcasterEditorDialog(QDialog):
             "basic_reaction_prompt": self.basic_reaction_prompt.text().strip(),
             "max_reactions": self.max_reactions.value(),
             "reaction_delay_seconds": self.reaction_delay.value(),
+            "reaction_session_id": self.reaction_session_id.text().strip(),
         }
 
     def load_triggers(self) -> None:
@@ -4338,7 +4363,13 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         )
         self.custom_settings_enabled = QCheckBox("この配信者では個別設定を使う")
         self.custom_settings_enabled.setChecked(bool(broadcaster.get("custom_settings_enabled", 0)))
-        self.thumbnail_10sec_enabled = QCheckBox("10秒ごとにサムネイルを作る")
+        self.thumbnail_10sec_enabled = QCheckBox("タイムライン用サムネイルを作る")
+        self.timeline_interval_seconds = NoWheelComboBox()
+        for seconds in (10, 30, 60):
+            self.timeline_interval_seconds.addItem(f"{seconds}秒刻み", seconds)
+        interval_value = int(broadcaster.get("timeline_interval_seconds") or 10)
+        interval_index = self.timeline_interval_seconds.findData(interval_value)
+        self.timeline_interval_seconds.setCurrentIndex(max(0, interval_index))
         self.audio_timeline_enabled = QCheckBox("音声タイムラインに乗せる")
         self.timeline_enabled = QCheckBox("タイムラインHTMLを作る")
         self.ranking_enabled = QCheckBox("ランキングを作る")
@@ -4406,6 +4437,20 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         self.whisperx_model = NoWheelComboBox()
         self.whisperx_model.addItems(model_choices)
         self.set_combo_text(self.whisperx_model, str(broadcaster.get("whisperx_model") or broadcaster.get("faster_whisper_model") or "medium"))
+        self.faster_whisper_segment_separator = NoWheelComboBox()
+        self.faster_whisper_segment_separator.addItem("スペースで結合", "space")
+        self.faster_whisper_segment_separator.addItem("改行で結合", "newline")
+        self.set_combo_value(
+            self.faster_whisper_segment_separator,
+            str(broadcaster.get("faster_whisper_segment_separator") or "space"),
+        )
+        self.whisperx_segment_separator = NoWheelComboBox()
+        self.whisperx_segment_separator.addItem("改行で結合", "newline")
+        self.whisperx_segment_separator.addItem("スペースで結合", "space")
+        self.set_combo_value(
+            self.whisperx_segment_separator,
+            str(broadcaster.get("whisperx_segment_separator") or "newline"),
+        )
         self.speaker_diarization_enabled = QCheckBox("話者分離文字起こしをする")
         self.speaker_diarization_enabled.setChecked(bool(broadcaster.get("speaker_diarization_enabled", 0)))
         self.diarization_min_speakers = NoWheelSpinBox()
@@ -4474,6 +4519,7 @@ class MonitoredBroadcasterEditorDialog(QDialog):
             self.html_upload_enabled,
         ]:
             feature_layout.addWidget(widget)
+        self.add_field(feature_layout, "タイムライン刻み", self.timeline_interval_seconds)
         left_layout.addWidget(feature_box)
 
         ai_box = QGroupBox("AI / 投稿 / HTMLサーバー")
@@ -4519,10 +4565,12 @@ class MonitoredBroadcasterEditorDialog(QDialog):
         fw_layout = QVBoxLayout(fw_page)
         fw_layout.setContentsMargins(0, 0, 0, 0)
         self.add_field(fw_layout, "FasterWhisperモデル", self.faster_whisper_model)
+        self.add_field(fw_layout, "セグメント結合", self.faster_whisper_segment_separator)
         x_page = QWidget()
         x_layout = QVBoxLayout(x_page)
         x_layout.setContentsMargins(0, 0, 0, 0)
         self.add_field(x_layout, "WhisperXモデル", self.whisperx_model)
+        self.add_field(x_layout, "セグメント結合", self.whisperx_segment_separator)
         x_layout.addWidget(self.speaker_diarization_enabled)
         self.add_field(x_layout, "話者数 最小", self.diarization_min_speakers)
         self.add_field(x_layout, "話者数 最大", self.diarization_max_speakers)
@@ -4725,6 +4773,7 @@ class MonitoredBroadcasterEditorDialog(QDialog):
             "html_generation_enabled": int(self.html_generation_enabled.isChecked()),
             "custom_settings_enabled": int(self.custom_settings_enabled.isChecked()),
             "thumbnail_10sec_enabled": int(self.thumbnail_10sec_enabled.isChecked()),
+            "timeline_interval_seconds": int(self.timeline_interval_seconds.currentData() or 10),
             "audio_timeline_enabled": int(self.audio_timeline_enabled.isChecked()),
             "timeline_enabled": int(self.timeline_enabled.isChecked()),
             "ranking_enabled": int(self.ranking_enabled.isChecked()),
@@ -4761,6 +4810,8 @@ class MonitoredBroadcasterEditorDialog(QDialog):
             "faster_whisper_model": self.faster_whisper_model.currentText(),
             "whisperx_model": self.whisperx_model.currentText(),
             "whisperx_enabled": int(whisperx_enabled),
+            "faster_whisper_segment_separator": str(self.faster_whisper_segment_separator.currentData() or "space"),
+            "whisperx_segment_separator": str(self.whisperx_segment_separator.currentData() or "newline"),
             "transcription_initial_prompt": self.transcription_initial_prompt.text().strip(),
             "transcription_hotwords_enabled": int(self.transcription_hotwords_enabled.isChecked()),
             "speaker_diarization_enabled": int(whisperx_enabled and self.speaker_diarization_enabled.isChecked()),
@@ -5667,6 +5718,15 @@ class SettingsTab(QWidget):
         self.toggle_session_visibility_button.setFixedWidth(42)
         self.toggle_session_visibility_button.setToolTip("user_sessionの表示/非表示")
         self.toggle_session_visibility_button.clicked.connect(self.toggle_session_visibility)
+        self.recording_session_value = QLineEdit()
+        self.recording_session_value.setEchoMode(QLineEdit.EchoMode.Password)
+        self.recording_session_value.setPlaceholderText("録画用 user_session")
+        self.toggle_recording_session_visibility_button = QPushButton("👁️")
+        self.toggle_recording_session_visibility_button.setFixedWidth(42)
+        self.toggle_recording_session_visibility_button.setToolTip("録画用user_sessionの表示/非表示")
+        self.toggle_recording_session_visibility_button.clicked.connect(
+            self.toggle_recording_session_visibility
+        )
         self.recorder_path = QLineEdit()
         self.recorder_path.setPlaceholderText("SlNicoLiveRec.exe")
         self.recorder_browse_button = QPushButton("参照")
@@ -5859,11 +5919,11 @@ class SettingsTab(QWidget):
         self.save_button = QPushButton("全体設定を保存")
         self.save_button.clicked.connect(self.save_settings)
 
-        box = QGroupBox("ニコニコ セッション")
+        box = QGroupBox("ニコニコ 投稿用セッション")
         box_layout = QVBoxLayout(box)
         box_layout.addWidget(QLabel("アカウント名"))
         box_layout.addWidget(self.account_name)
-        box_layout.addWidget(QLabel("user_session"))
+        box_layout.addWidget(QLabel("コメント投稿用 user_session"))
         session_row = QWidget()
         session_row_layout = QHBoxLayout(session_row)
         session_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -5890,6 +5950,13 @@ class SettingsTab(QWidget):
         recorder_path_layout.addWidget(self.recorder_browse_button)
         recorder_path_layout.addWidget(self.apply_recorder_settings_button)
         recorder_layout.addWidget(recorder_path_row)
+        recorder_layout.addWidget(QLabel("録画用 user_session（SlNicoLiveRec専用）"))
+        recording_session_row = QWidget()
+        recording_session_row_layout = QHBoxLayout(recording_session_row)
+        recording_session_row_layout.setContentsMargins(0, 0, 0, 0)
+        recording_session_row_layout.addWidget(self.recording_session_value, 1)
+        recording_session_row_layout.addWidget(self.toggle_recording_session_visibility_button)
+        recorder_layout.addWidget(recording_session_row)
         recorder_layout.addWidget(QLabel("トラッカー取得方式"))
         recorder_layout.addWidget(self.tracker_fetch_method)
         recorder_layout.addWidget(self.selenium_headless)
@@ -6112,6 +6179,10 @@ class SettingsTab(QWidget):
         try:
             config = tracker.load_config()
             self.recorder_path.setText(config.slnico_live_rec_exe)
+            try:
+                self.recording_session_value.setText(tracker.load_registered_slnico_user_session(config))
+            except Exception:
+                self.recording_session_value.clear()
             self.set_combo_value(self.tracker_fetch_method, config.tracker_fetch_method)
             self.selenium_headless.setChecked(bool(config.selenium_headless))
             self.recording_auto_restart.setChecked(bool(config.recording_auto_restart))
@@ -6214,6 +6285,14 @@ class SettingsTab(QWidget):
         else:
             self.session_value.setEchoMode(QLineEdit.EchoMode.Password)
             self.toggle_session_visibility_button.setText("👁️")
+
+    def toggle_recording_session_visibility(self) -> None:
+        if self.recording_session_value.echoMode() == QLineEdit.EchoMode.Password:
+            self.recording_session_value.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.toggle_recording_session_visibility_button.setText("隠す")
+        else:
+            self.recording_session_value.setEchoMode(QLineEdit.EchoMode.Password)
+            self.toggle_recording_session_visibility_button.setText("👁️")
 
     def toggle_all_key_visibility(self, visible: bool) -> None:
         mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
@@ -6337,6 +6416,13 @@ class SettingsTab(QWidget):
         if not path:
             self.status.setText("保存できない: 録画アプリのパスが空")
             return False
+        recording_session = self.recording_session_value.text().strip()
+        if recording_session:
+            try:
+                tracker.save_registered_slnico_user_session(path, recording_session)
+            except Exception as exc:
+                self.status.setText(f"録画用user_session保存失敗: {exc}")
+                return False
         if not Path(path).exists():
             self.status.setText(f"保存できない: 録画アプリが見つからない {path}")
             return False
@@ -6420,7 +6506,7 @@ class SettingsTab(QWidget):
         account_name = self.account_name.text().strip() or "default"
         user_session = self.session_value.text().strip()
         if not user_session:
-            self.status.setText("録画設定を保存。user_sessionは空なので保存してない")
+            self.status.setText("録画設定を保存。投稿用user_sessionは空なので保存してない")
             return
         current_time = tracker.now()
         with tracker.connect() as conn:
@@ -6432,7 +6518,7 @@ class SettingsTab(QWidget):
                 (account_name, user_session, current_time, current_time),
             )
             conn.commit()
-        self.status.setText(f"保存済み: {account_name}")
+        self.status.setText(f"投稿用user_session保存済み: {account_name}")
 
     def close_driver(self) -> None:
         if self.session_driver:

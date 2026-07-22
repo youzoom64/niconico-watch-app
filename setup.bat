@@ -10,11 +10,15 @@ set "FFMPEG_URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
 
 echo === niconico-watch-app setup %date% %time% === > "%SETUP_LOG%"
 
-echo [1/3] Preparing project-local Python 3.11 .venv...
+echo [1/4] Preparing project-local Python 3.11 .venv...
 call "%~dp0scripts\setup_venv.cmd"
 if errorlevel 1 goto :error
 
-echo [2/3] Checking FFmpeg...
+echo [2/4] Preparing WhisperX CUDA .venv...
+call "%~dp0scripts\setup_whisperx_venv.cmd"
+if errorlevel 1 goto :error
+
+echo [3/4] Checking FFmpeg...
 set "FFMPEG_EXE="
 if exist "%FFMPEG_ROOT%" for /r "%FFMPEG_ROOT%" %%F in (ffmpeg.exe) do if not defined FFMPEG_EXE set "FFMPEG_EXE=%%F"
 for /d %%D in ("%~dp0..\SlNicoLiveRec*") do if exist "%%~fD\binary\ffmpeg.exe" set "FFMPEG_EXE=%%~fD\binary\ffmpeg.exe"
@@ -31,7 +35,7 @@ if not defined FFMPEG_EXE (
   del /q "%FFMPEG_ZIP%"
 )
 
-echo [3/3] Setup complete.
+echo [4/4] Setup complete.
 echo ready>"%~dp0.setup_complete"
 echo setup complete >> "%SETUP_LOG%"
 if /I "%~1"=="--no-pause" exit /b 0

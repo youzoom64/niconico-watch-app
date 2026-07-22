@@ -39,7 +39,8 @@ def process(pipeline_data):
         display_features = config.get("display_features", {})
         thumbnail_width = max(1, int(display_features.get("thumbnail_width", 80) or 80))
         thumbnail_height = max(1, int(display_features.get("thumbnail_height", 60) or 60))
-        print(f"サムネイルサイズ: {thumbnail_width}x{thumbnail_height}")
+        timeline_interval = max(10, int(display_features.get("timeline_interval_seconds", 10) or 10))
+        print(f"サムネイルサイズ: {thumbnail_width}x{thumbnail_height} / 刻み: {timeline_interval}秒")
         timeline_plan = pipeline_data.get("recording_segment_timeline") or {}
         if timeline_plan.get("segments"):
             video_duration = float(timeline_plan.get("total_duration_seconds") or video_duration or 0.0)
@@ -49,6 +50,7 @@ def process(pipeline_data):
                 video_duration,
                 thumbnail_width,
                 thumbnail_height,
+                timeline_interval,
             )
         else:
             mp4_path = find_mp4_file(pipeline_data['platform_directory'], pipeline_data['account_id'], lv_value)
@@ -61,6 +63,7 @@ def process(pipeline_data):
                 time_diff_seconds,
                 thumbnail_width,
                 thumbnail_height,
+                timeline_interval,
             )
         
         print(f"Step09 完了: {lv_value} - スクリーンショット生成数: {screenshot_count}")
@@ -90,12 +93,12 @@ def load_broadcast_data(broadcast_dir, lv_value):
         return data
     raise Exception(f"放送データDBが見つかりません: {lv_value}")
 
-def generate_screenshots(mp4_path, screenshot_dir, video_duration, time_diff_seconds, thumbnail_width=80, thumbnail_height=60):
+def generate_screenshots(mp4_path, screenshot_dir, video_duration, time_diff_seconds, thumbnail_width=80, thumbnail_height=60, timeline_interval=10):
     """録画ファイルから10秒刻みでスクリーンショット生成"""
     try:
         screenshot_count = 0
         
-        for recording_seconds in range(0, int(video_duration) + 1, 10):
+        for recording_seconds in range(0, int(video_duration) + 1, timeline_interval):
             if recording_seconds > video_duration:
                 break
                 
@@ -103,7 +106,7 @@ def generate_screenshots(mp4_path, screenshot_dir, video_duration, time_diff_sec
             broadcast_seconds = recording_seconds + time_diff_seconds
             
             # タイムブロック位置を計算（10の倍数に切り上げ）
-            timeline_position = math.ceil(broadcast_seconds / 10.0) * 10
+            timeline_position = math.ceil(broadcast_seconds / float(timeline_interval)) * timeline_interval
             
             output_path = os.path.join(screenshot_dir, f"{recording_seconds}.jpg")
             
@@ -158,10 +161,11 @@ def generate_segment_screenshots(
     video_duration,
     thumbnail_width=80,
     thumbnail_height=60,
+    timeline_interval=10,
 ):
     """全体時刻を該当録画区間と区間内時刻へ変換して画像を取る。"""
     os.makedirs(screenshot_dir, exist_ok=True)
-    timeline_seconds = list(range(0, int(float(video_duration)) + 1, 10))
+    timeline_seconds = list(range(0, int(float(video_duration)) + 1, timeline_interval))
     expected_names = {f"{second}.jpg" for second in timeline_seconds}
     # A rerun with a corrected/shorter timeline must never leave thumbnails
     # from the former axis (for example 53:40) in the generated directory.

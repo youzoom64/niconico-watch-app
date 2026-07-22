@@ -84,6 +84,15 @@ def main() -> int:
 
     result = model.transcribe(str(audio_path), batch_size=args.batch_size, progress_callback=transcribe_progress)
     language = result.get("language") or "ja"
+    transcript_lines = [
+        {
+            "start": float(segment.get("start") or 0.0),
+            "end": float(segment.get("end") or 0.0),
+            "text": str(segment.get("text") or "").strip(),
+        }
+        for segment in result.get("segments", [])
+        if str(segment.get("text") or "").strip()
+    ]
     transcribed_end = max((float(segment.get("end") or 0.0) for segment in result.get("segments", [])), default=0.0)
     write_progress(
         args.progress_json,
@@ -92,6 +101,7 @@ def main() -> int:
             "message": "align",
             "done_seconds": transcribed_end,
             "segments": len(result.get("segments", [])),
+            "transcript_lines": transcript_lines,
             "elapsed_seconds": round(time.monotonic() - started, 2),
         },
     )
@@ -117,6 +127,7 @@ def main() -> int:
                 "done_seconds": None,
                 "percent": 0.0,
                 "segments": len(result.get("segments", [])),
+                "transcript_lines": transcript_lines,
                 "elapsed_seconds": round(time.monotonic() - started, 2),
             },
         )
@@ -136,6 +147,7 @@ def main() -> int:
                     "percent": float(percent),
                     "done_seconds": None,
                     "segments": len(result.get("segments", [])),
+                    "transcript_lines": transcript_lines,
                     "elapsed_seconds": round(time.monotonic() - started, 2),
                 },
             )
@@ -155,6 +167,7 @@ def main() -> int:
             "message": "save",
             "done_seconds": final_end,
             "segments": len(result.get("segments", [])),
+            "transcript_lines": transcript_lines,
             "elapsed_seconds": round(time.monotonic() - started, 2),
         },
     )
@@ -176,6 +189,7 @@ def main() -> int:
             "message": "done",
             "done_seconds": final_end,
             "segments": len(result.get("segments", [])),
+            "transcript_lines": transcript_lines,
             "elapsed_seconds": round(time.monotonic() - started, 2),
         },
     )

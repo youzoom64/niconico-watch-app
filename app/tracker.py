@@ -227,6 +227,7 @@ CREATE TABLE IF NOT EXISTS special_user_broadcasters (
     basic_reaction_messages TEXT,
     basic_reaction_prompt TEXT,
     reaction_use_codex INTEGER NOT NULL DEFAULT 0,
+    reaction_session_id TEXT,
     max_reactions INTEGER NOT NULL DEFAULT 1,
     reaction_delay_seconds REAL NOT NULL DEFAULT 0.0,
     created_at TEXT NOT NULL,
@@ -321,6 +322,7 @@ CREATE TABLE IF NOT EXISTS monitored_broadcasters (
     html_generation_enabled INTEGER NOT NULL DEFAULT 1,
     custom_settings_enabled INTEGER NOT NULL DEFAULT 0,
     thumbnail_10sec_enabled INTEGER NOT NULL DEFAULT 1,
+    timeline_interval_seconds INTEGER NOT NULL DEFAULT 10,
     audio_timeline_enabled INTEGER NOT NULL DEFAULT 1,
     ranking_enabled INTEGER NOT NULL DEFAULT 1,
     ai_conversation_enabled INTEGER NOT NULL DEFAULT 1,
@@ -352,6 +354,8 @@ CREATE TABLE IF NOT EXISTS monitored_broadcasters (
     faster_whisper_model TEXT,
     whisperx_model TEXT,
     whisperx_enabled INTEGER NOT NULL DEFAULT 0,
+    faster_whisper_segment_separator TEXT NOT NULL DEFAULT 'space',
+    whisperx_segment_separator TEXT NOT NULL DEFAULT 'newline',
     transcription_initial_prompt TEXT NOT NULL DEFAULT '',
     transcription_hotwords_enabled INTEGER NOT NULL DEFAULT 1,
     speaker_diarization_enabled INTEGER NOT NULL DEFAULT 0,
@@ -843,6 +847,7 @@ def run_subprocess_with_stage_log(
     env_overrides: dict[str, str] | None = None,
     progress_total_seconds: float | None = None,
     progress_json_path: Path | str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     postprocess_log(lv, stage, "DEBUG", f"{label} 開始", {"cmd": cmd})
     started = time.monotonic()
@@ -862,6 +867,8 @@ def run_subprocess_with_stage_log(
         inline_progress = progress_total_seconds is not None
         next_heartbeat = started + (1.0 if inline_progress else max(5.0, heartbeat_seconds))
         console_progress = ConsoleProgress(label, total_seconds=progress_total_seconds) if inline_progress else None
+        reported_transcript_lines = 0
+        last_gui_progress_signature: tuple[Any, ...] | None = None
         while True:
             code = process.poll()
             now_time = time.monotonic()
@@ -887,6 +894,16 @@ def run_subprocess_with_stage_log(
                     except Exception:
                         progress_payload = {}
                 if inline_progress and progress_payload:
+                    transcript_lines = progress_payload.get("transcript_lines") or []
+                    if progress_callback and isinstance(transcript_lines, list):
+                        for line in transcript_lines[reported_transcript_lines:]:
+                            if not isinstance(line, dict):
+                                continue
+                            progress_callback(
+                                f"[{float(line.get('start') or 0.0):.2f}-{float(line.get('end') or 0.0):.2f}] "
+                                f"{str(line.get('text') or '').strip()}"
+                            )
+                        reported_transcript_lines = len(transcript_lines)
                     done_seconds = progress_payload.get("done_seconds")
                     try:
                         done_value = float(done_seconds) if done_seconds is not None else None
@@ -905,6 +922,37 @@ def run_subprocess_with_stage_log(
                         extra=" ".join(part for part in extra_parts if part),
                         force=True,
                     )
+                    if progress_callback:
+                        stage_name = {
+                            "model_load": "モデル読込",
+                            "transcribe": "文字起こし",
+                            "align": "時刻合わせ",
+                            "diarize": "話者分離",
+                            "save": "保存",
+                            "done": "完了",
+                        }.get(str(progress_payload.get("stage") or ""), str(progress_payload.get("stage") or "処理中"))
+                        percent_value = progress_payload.get("percent")
+                        percent_text = ""
+                        if percent_value is not None:
+                            try:
+                                percent_text = f" {float(percent_value):.1f}%"
+                            except Exception:
+                                percent_text = ""
+                        segments_text = (
+                            f" segments={progress_payload.get('segments')}"
+                            if progress_payload.get("segments") is not None
+                            else ""
+                        )
+                        signature = (
+                            stage_name,
+                            round(float(percent_value), 1) if percent_value is not None else None,
+                            progress_payload.get("segments"),
+                        )
+                        if signature != last_gui_progress_signature:
+                            progress_callback(
+                                f"{label}進捗 {stage_name}{percent_text}{segments_text} 経過={elapsed_seconds:.1f}秒"
+                            )
+                            last_gui_progress_signature = signature
                     next_heartbeat = now_time + 1.0
                 elif inline_progress and progress:
                     done_seconds = parse_ffmpeg_time_seconds(progress.get("time"))
@@ -6472,6 +6520,7 @@ def process_completed_recording_segment(
                     diarize=bool(settings["speaker_diarization_enabled"]),
                     min_speakers=int(settings["diarization_min_speakers"]),
                     max_speakers=int(settings["diarization_max_speakers"]),
+                    progress_callback=progress_callback,
                     **common_kwargs,
                 )
             else:
@@ -7588,6 +7637,11 @@ def apply_monitored_broadcaster_feature_overrides(lv: str, legacy_config: dict[s
             "enable_emotion_scores": bool(row["emotion_score_enabled"]),
             "enable_word_ranking": bool(row["word_extract_enabled"]),
             "enable_thumbnails": bool(row["thumbnail_10sec_enabled"]),
+            "timeline_interval_seconds": max(10, int(row["timeline_interval_seconds"] or 10)),
+            "transcript_segment_separator": str(
+                row["whisperx_segment_separator"] if bool(row["whisperx_enabled"])
+                else row["faster_whisper_segment_separator"]
+            ) or ("newline" if bool(row["whisperx_enabled"]) else "space"),
             "enable_audio_timeline": bool(row["audio_timeline_enabled"]),
             "enable_timeline_html": bool(row["timeline_enabled"]),
             "enable_comment_ranking": bool(row["ranking_enabled"]),
@@ -8899,6 +8953,7 @@ def transcribe_audio_with_whisperx(
     mark_postprocess_done: bool = True,
     initial_prompt: str = "これはニコニコ生放送の録画音声です",
     hotwords: str = "",
+    progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     audio = Path(audio_path)
     if not audio.exists():
@@ -8926,113 +8981,61 @@ def transcribe_audio_with_whisperx(
             "python": sys.executable,
         },
     )
-    try:
-        import whisperx
-    except ImportError:
-        whisperx = None
-
     config = load_config()
     huggingface_token = config.huggingface_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
     if diarize and not huggingface_token:
         raise RuntimeError("WhisperX話者分離には config.json の huggingface_token または HF_TOKEN/HUGGINGFACE_TOKEN が必要です")
 
     try:
-        if whisperx is None:
-            helper_python = ROOT / "lab" / "whisperx_diarize_gui" / ".venv" / "Scripts" / "python.exe"
-            helper_script = ROOT / "tools" / "whisperx_transcribe_cli.py"
-            if not helper_python.exists():
-                raise RuntimeError(f"WhisperX helper Python not found: {helper_python}")
-            out_path = TMP_DIR / "whisperx_runs" / lv / f"{Path(audio).stem}_whisperx.json"
-            progress_path = TMP_DIR / "whisperx_runs" / lv / f"{Path(audio).stem}_whisperx_progress.json"
-            cmd = [
-                str(helper_python),
-                str(helper_script),
-                "--audio",
-                str(audio),
-                "--output",
-                str(out_path),
-                "--model",
-                model_size,
-                "--device",
-                device,
-                "--compute-type",
-                compute_type,
-                "--batch-size",
-                str(batch_size),
-                "--min-speakers",
-                str(int(min_speakers or 1)),
-                "--max-speakers",
-                str(int(max_speakers or 4)),
-                "--progress-json",
-                str(progress_path),
-                "--initial-prompt",
-                initial_prompt or "これはニコニコ生放送の録画音声です",
-                "--hotwords",
-                hotwords or "",
-            ]
-            if diarize:
-                cmd.append("--diarize")
-            postprocess_log(
-                lv,
-                "transcribe",
-                "DEBUG",
-                f"WhisperX外部Python呼び出し python={helper_python}",
-                {"python": str(helper_python), "script": str(helper_script), "output": str(out_path)},
+        helper_python = ROOT / ".venv-whisperx" / "Scripts" / "python.exe"
+        helper_script = ROOT / "tools" / "whisperx_transcribe_cli.py"
+        if not helper_python.exists():
+            raise RuntimeError(
+                "WhisperX専用.venvがありません。setup.batを実行してください: "
+                f"{helper_python}"
             )
-            proc = run_subprocess_with_stage_log(
-                cmd,
-                lv=lv,
-                stage="transcribe",
-                label="WhisperX",
-                timeout=60 * 60 * 6,
-                heartbeat_seconds=60,
-                env_overrides={
-                    "HF_TOKEN": huggingface_token,
-                    "HUGGINGFACE_TOKEN": huggingface_token,
-                },
-                progress_total_seconds=audio_duration,
-                progress_json_path=progress_path,
-            )
-            result = json.loads(out_path.read_text(encoding="utf-8"))
-        else:
-            model = whisperx.load_model(
-                model_size,
-                device,
-                compute_type=compute_type,
-                language="ja",
-                asr_options={
-                    "initial_prompt": initial_prompt or "これはニコニコ生放送の録画音声です",
-                    "hotwords": hotwords or None,
-                },
-            )
-            postprocess_log(lv, "transcribe", "DEBUG", f"WhisperXモデルロード完了 model={model_size} device={device}")
-            result = model.transcribe(str(audio), batch_size=batch_size)
-            language = result.get("language") or "ja"
-            postprocess_log(lv, "transcribe", "DEBUG", f"WhisperXアライン開始 language={language}")
-            align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
-            result = whisperx.align(
-                result["segments"],
-                align_model,
-                metadata,
-                str(audio),
-                device,
-                return_char_alignments=False,
-            )
-            if diarize:
-                postprocess_log(
-                    lv,
-                    "transcribe",
-                    "DEBUG",
-                    f"WhisperX話者分離開始 min={min_speakers} max={max_speakers}",
-                    {"min_speakers": min_speakers, "max_speakers": max_speakers},
-                )
-                diarize_model = whisperx.DiarizationPipeline(use_auth_token=huggingface_token, device=device)
-                diarize_segments = diarize_model(
-                    str(audio),
-                    min_speakers=int(min_speakers or 1),
-                    max_speakers=int(max_speakers or 4),
-                )
-                result = whisperx.assign_word_speakers(diarize_segments, result)
+        out_path = TMP_DIR / "whisperx_runs" / lv / f"{Path(audio).stem}_whisperx.json"
+        progress_path = TMP_DIR / "whisperx_runs" / lv / f"{Path(audio).stem}_whisperx_progress.json"
+        cmd = [
+            str(helper_python),
+            str(helper_script),
+            "--audio", str(audio),
+            "--output", str(out_path),
+            "--model", model_size,
+            "--device", device,
+            "--compute-type", compute_type,
+            "--batch-size", str(batch_size),
+            "--min-speakers", str(int(min_speakers or 1)),
+            "--max-speakers", str(int(max_speakers or 4)),
+            "--progress-json", str(progress_path),
+            "--initial-prompt", initial_prompt or "これはニコニコ生放送の録画音声です",
+            "--hotwords", hotwords or "",
+        ]
+        if diarize:
+            cmd.append("--diarize")
+        postprocess_log(
+            lv,
+            "transcribe",
+            "DEBUG",
+            f"WhisperX専用Python呼び出し python={helper_python}",
+            {"python": str(helper_python), "script": str(helper_script), "output": str(out_path)},
+        )
+        run_subprocess_with_stage_log(
+            cmd,
+            lv=lv,
+            stage="transcribe",
+            label="WhisperX",
+            timeout=60 * 60 * 6,
+            heartbeat_seconds=60,
+            env_overrides={
+                "HF_TOKEN": huggingface_token,
+                "HUGGINGFACE_TOKEN": huggingface_token,
+            },
+            progress_total_seconds=audio_duration,
+            progress_json_path=progress_path,
+            progress_callback=progress_callback,
+        )
+        result = json.loads(out_path.read_text(encoding="utf-8"))
     except Exception as exc:
         postprocess_log(
             lv,
@@ -10335,6 +10338,8 @@ def save_monitored_broadcaster_details(broadcaster_id: str, values: dict[str, An
         "faster_whisper_model",
         "whisperx_model",
         "whisperx_enabled",
+        "faster_whisper_segment_separator",
+        "whisperx_segment_separator",
         "transcription_initial_prompt",
         "transcription_hotwords_enabled",
         "speaker_diarization_enabled",
@@ -10349,6 +10354,7 @@ def save_monitored_broadcaster_details(broadcaster_id: str, values: dict[str, An
         "intro_conversation_prompt",
         "outro_conversation_prompt",
         "recording_output_dir",
+        "timeline_interval_seconds",
     }
     broadcaster_id = broadcaster_id.strip()
     updates = {key: value for key, value in values.items() if key in allowed}
@@ -11049,6 +11055,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "basic_reaction_messages": "TEXT",
         "basic_reaction_prompt": "TEXT",
         "reaction_use_codex": "INTEGER NOT NULL DEFAULT 0",
+        "reaction_session_id": "TEXT",
         "max_reactions": "INTEGER NOT NULL DEFAULT 1",
         "reaction_delay_seconds": "REAL NOT NULL DEFAULT 0.0",
     }
@@ -11118,6 +11125,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "upload_screenshots_enabled": "INTEGER NOT NULL DEFAULT 1",
         "custom_settings_enabled": "INTEGER NOT NULL DEFAULT 0",
         "thumbnail_10sec_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "timeline_interval_seconds": "INTEGER NOT NULL DEFAULT 10",
         "audio_timeline_enabled": "INTEGER NOT NULL DEFAULT 1",
         "ranking_enabled": "INTEGER NOT NULL DEFAULT 1",
         "ai_conversation_enabled": "INTEGER NOT NULL DEFAULT 1",
@@ -11153,6 +11161,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "faster_whisper_model": "TEXT",
         "whisperx_model": "TEXT",
         "whisperx_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "faster_whisper_segment_separator": "TEXT NOT NULL DEFAULT 'space'",
+        "whisperx_segment_separator": "TEXT NOT NULL DEFAULT 'newline'",
         "transcription_initial_prompt": "TEXT NOT NULL DEFAULT ''",
         "transcription_hotwords_enabled": "INTEGER NOT NULL DEFAULT 1",
         "speaker_diarization_enabled": "INTEGER NOT NULL DEFAULT 0",
@@ -12362,6 +12372,56 @@ def decrypt_windows_dpapi_text(encrypted_base64: str) -> str:
     if not value:
         raise RuntimeError("SlNicoLiveRec credential decrypted to an empty value")
     return value
+
+
+def encrypt_windows_dpapi_text(value: str) -> str:
+    if os.name != "nt":
+        raise RuntimeError("SlNicoLiveRec credentials can only be encrypted on Windows")
+    raw = str(value or "").encode("utf-8")
+    if not raw:
+        raise RuntimeError("SlNicoLiveRec credential is empty")
+    raw_buffer = (ctypes.c_byte * len(raw)).from_buffer_copy(raw)
+    input_blob = _WindowsDataBlob(
+        len(raw),
+        ctypes.cast(raw_buffer, ctypes.POINTER(ctypes.c_byte)),
+    )
+    output_blob = _WindowsDataBlob()
+    crypt_protect = ctypes.windll.crypt32.CryptProtectData
+    crypt_protect.argtypes = [
+        ctypes.POINTER(_WindowsDataBlob),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(_WindowsDataBlob),
+    ]
+    crypt_protect.restype = wintypes.BOOL
+    if not crypt_protect(
+        ctypes.byref(input_blob), None, None, None, None, 0, ctypes.byref(output_blob)
+    ):
+        raise ctypes.WinError()
+    try:
+        encrypted = ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    finally:
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        local_free(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
+    return base64.b64encode(encrypted).decode("ascii")
+
+
+def save_registered_slnico_user_session(exe_path: str | Path, user_session: str) -> Path:
+    exe = Path(str(exe_path or "").strip()).expanduser()
+    config_path = exe.parent / "SlNicoLiveRec_config.json"
+    if not exe.is_file() or not config_path.is_file():
+        raise FileNotFoundError(f"SlNicoLiveRec設定が見つかりません: {config_path}")
+    raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    raw["UserSession"] = encrypt_windows_dpapi_text(user_session)
+    temporary_path = config_path.with_suffix(config_path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary_path.replace(config_path)
+    return config_path
 
 
 def load_registered_slnico_user_session(config: Config | None = None) -> str:

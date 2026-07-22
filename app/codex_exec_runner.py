@@ -68,8 +68,10 @@ def run_codex_exec(
         raise ValueError("AI CLI prompt is empty")
 
     workdir = Path(cwd or config.cwd or Path.cwd())
+    provider = normalize_provider(config.provider)
+    new_session_id = str(uuid4()) if provider in {"grok", "claude"} and not session_id else ""
     command, stdin_text, cleanup_paths, output_path = build_ai_cli_command(
-        config, workdir, prompt, session_id=session_id
+        config, workdir, prompt, session_id=session_id, new_session_id=new_session_id
     )
     merged_env = os.environ.copy()
     merged_env.setdefault("PYTHONUTF8", "1")
@@ -93,7 +95,7 @@ def run_codex_exec(
     if output_path and output_path.exists():
         stdout = output_path.read_text(encoding="utf-8", errors="replace")
     text = parse_ai_cli_text(config.provider, stdout, completed.stderr)
-    resolved_session_id = parse_codex_session_id(event_stdout) if normalize_provider(config.provider) == "codex" else ""
+    resolved_session_id = parse_codex_session_id(event_stdout) if provider == "codex" else new_session_id
     cleanup_temp_paths(cleanup_paths)
     return CodexExecResult(
         command=command,
@@ -123,6 +125,7 @@ def build_ai_cli_command(
     prompt: str,
     *,
     session_id: str = "",
+    new_session_id: str = "",
 ) -> tuple[list[str], str | None, list[Path], Path | None]:
     provider = normalize_provider(config.provider)
     cleanup: list[Path] = []
@@ -140,6 +143,10 @@ def build_ai_cli_command(
             command.extend(["--model", config.model])
         if config.effort:
             command.extend(["--effort", config.effort])
+        if session_id:
+            command.extend(["--resume", str(session_id)])
+        elif new_session_id:
+            command.extend(["--session-id", str(new_session_id)])
         command.extend(config.extra_args)
         return command, prompt, cleanup, None
     if provider == "grok":
@@ -163,6 +170,10 @@ def build_ai_cli_command(
             command.extend(["-m", config.model])
         if config.effort:
             command.extend(["--effort", config.effort])
+        if session_id:
+            command.extend(["--resume", str(session_id)])
+        elif new_session_id:
+            command.extend(["--session-id", str(new_session_id)])
         command.extend(config.extra_args)
         command.extend(["--prompt-file", str(prompt_file)])
         return command, None, cleanup, None

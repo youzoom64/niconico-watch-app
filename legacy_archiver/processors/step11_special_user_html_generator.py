@@ -712,7 +712,7 @@ def generate_broadcast_items(user_data, broadcast_data, lv_value):
     last_comment = user_data['comments'][-1].get('text', '') if user_data['comments'] else ''
     
     item = f'''
-        <div class="link-item">
+        <div class="link-item" data-lv="{lv_value}">
             <p class="separator">―――――――――――――――――――――――――――――――――――――――――――</p>
             <p class="start-time">開始時間: {format_start_time(broadcast_data.get('start_time', ''))}</p>
             <div class="comment-preview">
@@ -759,18 +759,22 @@ def load_existing_broadcast_items(list_file_path, exclude_lv=None):
 
         soup = BeautifulSoup(content, 'html.parser')
         items_by_lv = {}
-        for item in soup.select('div.link-item'):
-            link_box = item.find('div', class_='broadcast-link', recursive=False)
-            link = link_box.find('a', href=True) if link_box else None
-            if not link:
+        # 過去版が同じ項目を入れ子で追記した壊れたHTMLでも、最も内側の
+        # link-itemだけを採用する。LVをキーにするため同じ放送は必ず1件になる。
+        for item in reversed(soup.select('div.link-item')):
+            if item.select_one(':scope > div.link-item'):
                 continue
-            match = re.search(r'_lv(\d+)_detail\.html(?:$|[?#])', link.get('href', ''))
-            if not match:
-                continue
-            item_lv = f"lv{match.group(1)}"
+            item_lv = str(item.get('data-lv') or '').strip()
+            if not re.fullmatch(r'lv\d+', item_lv):
+                link_box = item.find('div', class_='broadcast-link')
+                link = link_box.find('a', href=True) if link_box else None
+                match = re.search(r'_lv(\d+)_detail\.html(?:$|[?#])', link.get('href', '')) if link else None
+                if not match:
+                    continue
+                item_lv = f"lv{match.group(1)}"
             if item_lv == str(exclude_lv or ''):
                 continue
-            items_by_lv[item_lv] = str(item)
+            items_by_lv.setdefault(item_lv, str(item))
         return list(items_by_lv.values())
         
     except Exception as e:
