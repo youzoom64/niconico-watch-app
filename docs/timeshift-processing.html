@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>タイムシフトGUI・ローカル処理 取扱説明書</title>
+  <style>
+    :root{color-scheme:dark;--bg:#101016;--panel:#191923;--line:#343445;--text:#eeeef5;--muted:#aaaabd;--accent:#ff78b7;--blue:#62c9ff;--green:#75dfa6;--warn:#ffc96b}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:"Yu Gothic UI","Meiryo",sans-serif;line-height:1.75}
+    main{max-width:1120px;margin:auto;padding:32px 22px 80px}h1{font-size:2rem;border-bottom:2px solid var(--accent);padding-bottom:12px}h2{margin-top:46px;border-left:5px solid var(--accent);padding-left:12px}h3{color:var(--blue);margin-top:30px}
+    a{color:var(--blue)}code{background:#292936;padding:.15em .4em;border-radius:4px}.lead,.note,.warning,.success{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}.note{border-left:4px solid var(--blue)}.warning{border-left:4px solid var(--warn)}.success{border-left:4px solid var(--green)}
+    table{width:100%;border-collapse:collapse;margin:14px 0 24px;background:var(--panel)}th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}th{background:#262634;color:#fff}ol,ul{padding-left:1.6em}
+    .toc,.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:10px;margin:24px 0}.toc a,.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px;text-decoration:none}.toc a:hover{border-color:var(--accent)}.card strong{display:block;color:var(--blue);font-size:1.05rem}.card span{display:block;color:var(--muted);font-size:.92rem;margin-top:4px}
+    .flow{white-space:pre-wrap;background:#09090e;border:1px solid var(--line);border-radius:10px;padding:18px;overflow:auto;color:#fff}.steps td:first-child{white-space:nowrap;font-weight:700;color:var(--blue)}kbd{background:#333342;border:1px solid #555568;border-radius:4px;padding:1px 6px}
+    @media(max-width:680px){main{padding:20px 12px 60px}h1{font-size:1.55rem}table{font-size:.88rem}th,td{padding:7px}.wide{display:block;overflow-x:auto}.flow{font-size:.82rem}}
+  </style>
+</head>
+<body><main>
+  <h1>タイムシフトGUI・ローカル処理 取扱説明書</h1>
+  <p class="lead">「Niconico タイムシフト / ローカル処理」は、放送URLから動画とコメントを取得したり、PCに保存済みの動画から文字起こし・分析・HTML生成・再公開を行ったりする専用画面です。監視アプリとは別プロセスで動くため、保存済み放送のやり直しにも使えます。</p>
+
+  <nav class="toc">
+    <a href="#start">起動と画面構成</a>
+    <a href="#choose">目的から選ぶ</a>
+    <a href="#url">URLから取得</a>
+    <a href="#local">ローカル動画を処理</a>
+    <a href="#steps">Stepの選び方</a>
+    <a href="#special">スペシャル処理</a>
+    <a href="#tags">タグ修正</a>
+    <a href="#upload">未アップロード</a>
+    <a href="#deleted">消滅URL登録</a>
+    <a href="#status">結果とエラー</a>
+  </nav>
+
+  <section id="start">
+    <h2>1. 起動と画面構成</h2>
+    <p>通常はプロジェクト内の<code>scripts\start_timeshift_gui.cmd</code>をダブルクリックして起動します。メインGUIから「ローカル処理へ送る」などを実行した場合も、この画面が開きます。既に起動していれば同じ画面へ追加されます。</p>
+    <p class="note">タイムシフトGUIは一つだけ起動します。URL取得とローカル処理を同時に走らせず、同じ画面内で順番に処理します。</p>
+    <table><thead><tr><th>タブ</th><th>何をする場所か</th><th>よく使う場面</th></tr></thead><tbody>
+      <tr><td>URLから取得</td><td>放送URLや配信者の番組一覧URLから、タイムシフト動画とコメントを取得します。</td><td>PCに動画がない放送を処理したい</td></tr>
+      <tr><td>ローカル処理</td><td>PCにある動画を使い、必要なStepだけを実行します。</td><td>文字起こし、HTML再生成、再公開</td></tr>
+      <tr><td>タグ修正</td><td>保存済み放送のタグを編集し、HTMLと一覧を更新します。</td><td>人物タグや分類を直したい</td></tr>
+      <tr><td>スペシャル処理</td><td>スペシャルユーザーの一覧・個別HTMLを生成します。</td><td>未生成ページの作成、AI分析、再公開</td></tr>
+      <tr><td>未アップロード</td><td>生成済みでまだ公開されていない放送を選んで送信します。</td><td>生成は終わったが公開だけ失敗した</td></tr>
+      <tr><td>消滅URL登録</td><td>削除された放送を確認し、一覧へ反映します。</td><td>公開一覧に削除済み放送の状態を反映したい</td></tr>
+    </tbody></table>
+  </section>
+
+  <section id="choose">
+    <h2>2. やりたいことから操作を選ぶ</h2>
+    <div class="cards">
+      <div class="card"><strong>動画がまだない</strong><span>「URLから取得」で放送URLを入力します。</span></div>
+      <div class="card"><strong>PCに動画がある</strong><span>「ローカル処理」へ動画を追加します。</span></div>
+      <div class="card"><strong>HTMLだけ作り直したい</strong><span>ローカル処理でStep12・13・14を選びます。</span></div>
+      <div class="card"><strong>公開だけやり直したい</strong><span>Step15、または「未アップロード」を使います。</span></div>
+      <div class="card"><strong>スペシャルユーザーHTML</strong><span>「スペシャル処理」で対象行を処理します。</span></div>
+      <div class="card"><strong>タグだけ直したい</strong><span>「タグ修正」で保存・再生成します。</span></div>
+    </div>
+    <div class="flow">動画がない ──→ URLから取得 ──→ 動画・コメント保存 ──→ 必要ならHTML生成
+
+動画がある ──→ ローカル処理 ──→ 実行Stepを選択 ──→ 生成・再生成・公開
+
+特殊な再処理 ──→ タグ修正 / スペシャル処理 / 未アップロード</div>
+  </section>
+
+  <section id="url">
+    <h2>3. URLからタイムシフトを取得する</h2>
+    <ol>
+      <li>「URLから取得」タブを開きます。</li>
+      <li>入力欄へ、放送URLまたは配信者の番組一覧URLを1行に1件入力します。</li>
+      <li>HTMLまで作る場合は、実行するStepを選択します。</li>
+      <li>取得だけなら「動画・コメントのみ取得」を押します。</li>
+      <li>取得後にHTML生成まで続けるなら「動画・コメントを取得してHTML作成」を押します。</li>
+      <li>下部の処理状況で、URL解析、視聴可否、取得、コメント保存、生成結果を確認します。</li>
+    </ol>
+    <h3>入力例</h3>
+    <div class="flow">https://live.nicovideo.jp/watch/lv350000000
+https://www.nicovideo.jp/user/12345678/live_programs</div>
+    <ul>
+      <li>既に取得済みの動画があれば再利用します。</li>
+      <li>ライブ録画中の同じ放送は重複取得せず、録画終了を待ちます。</li>
+      <li>タイムシフト視聴期限切れ、非公開、権限不足の場合は取得できません。</li>
+      <li>コメントは保存済み件数を確認し、不足している場合にAPI取得します。</li>
+    </ul>
+  </section>
+
+  <section id="local">
+    <h2>4. PCにある動画をローカル処理する</h2>
+    <ol>
+      <li>「ローカル処理」タブを開きます。</li>
+      <li>動画を一覧へドラッグ＆ドロップするか、「動画を追加」を押します。</li>
+      <li>一覧にLV番号とファイルパスが表示されたことを確認します。</li>
+      <li>実行するStepだけをチェックします。</li>
+      <li>Step15を使う場合は、「MP3をアップロード」「スクショをアップロード」も確認します。</li>
+      <li>「ローカル動画からHTML作成」を押します。</li>
+      <li>下部の処理状況で、現在の工程と完了結果を確認します。</li>
+    </ol>
+    <h3>対応する動画</h3>
+    <p><code>MP4</code>、<code>MKV</code>、<code>WebM</code>、<code>FLV</code>、<code>TS</code>に対応します。ファイル名には<code>lv</code>から始まる放送IDが必要です。</p>
+    <div class="flow">使用できる例:
+lv350000000_配信タイトル.mp4
+録画_lv350000000_part2.mkv
+
+使用できない例:
+配信タイトル.mp4  ← lv番号がない</div>
+    <h3>動画が分割されている場合</h3>
+    <p>同じLV番号を持つ複数動画は一つの放送として扱います。録画区間DBがある場合は、その区間情報を使って時間軸を統合します。複数のLVを追加した場合は、放送日時が古い順に処理します。</p>
+    <p class="warning">Step01またはStep02を含む処理が成功すると、使用した元動画は生成HTMLと同じフォルダーの<code>archive</code>サブフォルダーへ移動します。元の場所に残したい場合は、Step01・02を外して後続Stepだけを実行してください。</p>
+  </section>
+
+  <section id="steps">
+    <h2>5. Stepの選び方</h2>
+    <p>チェックしたStepだけを実行します。ただしStep01・02を選ぶと、動画区間確認、音声抽出、文字起こしなどの前処理も行います。Step01・02を外すと、保存済みDB・音声・画像などを再利用して後続処理だけを行います。</p>
+    <table class="steps"><thead><tr><th>目的</th><th>選択するStep</th><th>結果</th></tr></thead><tbody>
+      <tr><td>HTMLの見た目だけ更新</td><td>12・13・14</td><td>文字起こしや要約をやり直さず、個別HTMLと一覧を再生成</td></tr>
+      <tr><td>HTML更新＋公開</td><td>12・13・14・15</td><td>再生成後、設定済みサーバーへ送信</td></tr>
+      <tr><td>タグ・一覧だけ更新</td><td>13・14。公開するなら15</td><td>配信者一覧とタグページを更新</td></tr>
+      <tr><td>要約を作り直す</td><td>05＋反映したい後続Step</td><td>保存済み文字起こしから要約を再生成</td></tr>
+      <tr><td>文字起こしをやり直す</td><td>02＋反映したい後続Step</td><td>動画から音声と文字起こしを再作成</td></tr>
+      <tr><td>最初から処理</td><td>01から必要な最終Stepまで</td><td>動画とコメントから一連の生成処理を実行</td></tr>
+      <tr><td>公開だけ再実行</td><td>15</td><td>生成済みの公開対象を送信</td></tr>
+    </tbody></table>
+    <h3>Step一覧</h3>
+    <div class="wide"><table><thead><tr><th>Step</th><th>内容</th><th>主な出力</th></tr></thead><tbody>
+      <tr><td>01</td><td>放送データ収集</td><td>タイトル、配信者、時刻などの放送情報</td></tr>
+      <tr><td>02</td><td>音声抽出・文字起こし</td><td>音声、MP3、文字起こし</td></tr>
+      <tr><td>03</td><td>感情分析</td><td>感情スコア</td></tr>
+      <tr><td>04</td><td>単語分析</td><td>特徴語、頻出語</td></tr>
+      <tr><td>05</td><td>要約</td><td>放送要約</td></tr>
+      <tr><td>06</td><td>音楽生成</td><td>生成音楽</td></tr>
+      <tr><td>07</td><td>要約画像生成</td><td>抽象画像</td></tr>
+      <tr><td>08</td><td>AI会話生成</td><td>キャラクター会話</td></tr>
+      <tr><td>09</td><td>スクリーンショット生成</td><td>放送画像</td></tr>
+      <tr><td>10</td><td>コメント処理</td><td>コメント集計・整形データ</td></tr>
+      <tr><td>11</td><td>特殊ユーザーHTML</td><td>従来形式の特殊ユーザーページ</td></tr>
+      <tr><td>12</td><td>放送HTML生成</td><td>放送ごとの個別HTML</td></tr>
+      <tr><td>13</td><td>タグ・インデックス生成</td><td>タグページ、一覧データ</td></tr>
+      <tr><td>14</td><td>配信者一覧生成</td><td>配信者トップページ</td></tr>
+      <tr><td>15</td><td>アップロード</td><td>公開サーバー上のHTML・素材</td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section id="special">
+    <h2>6. スペシャルユーザーHTMLを処理する</h2>
+    <p>メインGUIのスペシャルユーザー確認画面から未処理放送を送ると、「スペシャル処理」タブへ対象が追加されます。通常のStep一覧とは別の処理です。</p>
+    <ol>
+      <li>一覧で処理する行を選択します。「全選択」「全解除」も使えます。</li>
+      <li>コメント表と基本統計にAI分析も加える場合は「AI分析を作る」をONにします。</li>
+      <li>既存の個別HTMLも上書きする場合だけ「既存HTMLを作り直す」をONにします。</li>
+      <li>生成後に公開する場合は「サーバーへアップロードする」をONにします。</li>
+      <li>「選択を処理」を押します。</li>
+    </ol>
+    <table><thead><tr><th>設定</th><th>動作</th></tr></thead><tbody>
+      <tr><td>AI分析を作る</td><td>ONならAI分析を追加します。OFFならコメント表と基本統計だけなので速く処理できます。</td></tr>
+      <tr><td>既存HTMLを作り直す</td><td>OFFなら作成済み個別HTMLを保持します。ONなら現在の設定で上書きします。</td></tr>
+      <tr><td>サーバーへアップロードする</td><td>生成に成功したページを続けて公開します。</td></tr>
+    </tbody></table>
+  </section>
+
+  <section id="tags">
+    <h2>7. タグを修正する</h2>
+    <p>保存済み放送のタグだけを修正したい場合は「タグ修正」タブを使います。対象LVを読み込み、タグを変更して保存すると、Step12・13・14を使って放送HTML、タグページ、配信者一覧を更新します。公開も選んだ場合はStep15まで実行します。</p>
+    <p class="note">文字起こしや要約を作り直す必要はありません。タグ修正後は、個別HTMLだけでなく配信者一覧とタグ別一覧も確認してください。</p>
+  </section>
+
+  <section id="upload">
+    <h2>8. 未アップロードの放送を公開する</h2>
+    <p>HTML生成は成功したがStep15が失敗した場合や、後からまとめて公開する場合は「未アップロード」タブを使います。</p>
+    <ol>
+      <li>一覧を更新し、未アップロードの放送を表示します。</li>
+      <li>公開する行を選択します。</li>
+      <li>MP3やスクリーンショットも必要か確認します。</li>
+      <li>アップロードを実行します。</li>
+      <li>完了後、公開URLで一覧、個別HTML、画像、タグページを確認します。</li>
+    </ol>
+    <p class="warning">認証情報やAPIキーをログ、README、GitHub、生成HTMLへ書かないでください。</p>
+  </section>
+
+  <section id="deleted">
+    <h2>9. 消滅URLを一覧へ反映する</h2>
+    <p>「消滅URL登録」は、既に生成済みの放送がニコニコ側で削除されているか確認し、その状態を公開一覧へ反映するための機能です。配信者を指定して確認すると、生成済みLVの実URLを調べ、削除済みの放送を記録します。変更があった場合は一覧関連Stepを再実行します。</p>
+  </section>
+
+  <section id="status">
+    <h2>10. 処理状況とエラーの見方</h2>
+    <p>下部の処理状況には、LVごとの進行が順番に表示されます。</p>
+    <ul>
+      <li>コメントをDBから再利用したか、APIから取得したか</li>
+      <li>実行するStepとスキップするStep</li>
+      <li>動画区間、音声抽出、文字起こしなど、現在開始した工程</li>
+      <li>HTML、MP3、動画アーカイブの生成先</li>
+      <li>成功件数、失敗件数、失敗理由</li>
+    </ul>
+    <table><thead><tr><th>表示・エラー</th><th>確認すること</th></tr></thead><tbody>
+      <tr><td>除外（lv番号なし）</td><td>動画ファイル名へ<code>lv123456789</code>形式の放送IDを入れます。</td></tr>
+      <tr><td>ローカル動画が見つからない</td><td>対象動画を「ローカル処理」へ直接追加します。</td></tr>
+      <tr><td>実行するStepが選択されていない</td><td>目的に必要なStepを一つ以上チェックします。</td></tr>
+      <tr><td>タイムシフト視聴不可</td><td>視聴期限、公開状態、ログイン状態を確認します。</td></tr>
+      <tr><td>文字起こし失敗</td><td>GPUメモリ、CUDA、モデル、動画・音声ファイルを確認します。</td></tr>
+      <tr><td>アップロード失敗</td><td>公開先設定、認証、ネットワークを確認し、「未アップロード」から再実行します。</td></tr>
+    </tbody></table>
+    <p class="success">成功したLVは処理一覧から取り除かれます。失敗したLVは残るため、エラーを直した後に同じ対象を再実行できます。</p>
+    <p class="warning">タイムシフトGUIを閉じると、このGUIが開始した実行中の処理も停止します。処理中は完了表示が出るまで画面を閉じないでください。</p>
+  </section>
+</main></body></html>

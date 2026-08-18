@@ -1,0 +1,595 @@
+<!-- Step11が生成した個別/リンク一覧の見本ページへ共通で差し込む編集UI。 -->
+<style id="design-editor-style">
+  #design-panel { position: fixed; top: 0; right: 0; width: 320px; height: 100vh; overflow-y: auto;
+    background: rgba(20,19,23,.96); border-left: 1px solid #3a3944; color: #e8e8ea; z-index: 100000;
+    font-family: "Yu Gothic UI", "Meiryo", sans-serif; font-size: 12px; padding: 12px; text-shadow: none; }
+  #design-panel h2 { margin: 0 0 8px; font-size: 14px; color: #ff9db4; text-shadow: none; }
+  #design-panel fieldset { border: 1px solid #3a3944; border-radius: 6px; margin: 0 0 10px; padding: 8px; }
+  #design-panel legend { font-size: 11px; color: #b9b8c0; padding: 0 4px; }
+  #design-panel label.row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 5px 0; }
+  #design-panel input[type=color] { width: 42px; height: 22px; padding: 0; border: 1px solid #4a4854; background: none; }
+  #design-panel input[type=range] { width: 132px; }
+  #design-panel input.range-number { width: 62px; box-sizing: border-box; background: #26252c;
+    color: #e8e8ea; border: 1px solid #4a4854; border-radius: 4px; padding: 2px 3px;
+    font-size: 11px; text-align: right; }
+  #design-panel input[type=text], #design-panel select { width: 160px; background: #26252c; color: #e8e8ea;
+    border: 1px solid #4a4854; border-radius: 4px; padding: 2px 4px; font-size: 12px; }
+  #design-panel .value { min-width: 40px; text-align: right; color: #8f8e98; }
+  #design-save { width: 100%; background: #a3123c; border: 1px solid #c0164a; color: #fff; font-weight: 700;
+    border-radius: 5px; padding: 8px; cursor: pointer; font-size: 13px; }
+  #design-save:hover { background: #bb1546; }
+  #design-status { margin-top: 6px; min-height: 15px; color: #7fd3a1; }
+  #design-element { border-color: #a3123c; }
+  .design-gear { border: 1px solid #6b6a76; background: rgba(30,29,35,.9); color: #eee; border-radius: 50%;
+    width: 26px; height: 26px; line-height: 1; padding: 0; cursor: pointer; font-size: 14px;
+    vertical-align: middle; margin-left: 10px; text-shadow: none; }
+  .design-gear:hover { background: #3a3944; }
+  .design-gear.active { background: #a3123c; border-color: #c0164a; color: #fff; }
+  /* 編集UIをページへ重ねない。UIの左端をプレビュー領域の右端にする。 */
+  body {
+    box-sizing: border-box;
+    width: calc(100vw - 345px);
+    max-width: calc(100vw - 345px);
+    padding-right: 0;
+    overflow-x: hidden;
+  }
+  #myCanvas, .particles-background {
+    width: calc(100vw - 345px) !important;
+    max-width: calc(100vw - 345px) !important;
+  }
+  /* 元HTMLは中央要素へ100vwを直接指定している。UIを除いた幅で中央計算させる。 */
+  .comment-analysis, .link-container {
+    width: calc(100vw - 345px) !important;
+    max-width: calc(100vw - 345px) !important;
+  }
+</style>
+
+<div id="design-panel">
+  <h2>{{EDITOR_TITLE}}</h2>
+  <fieldset>
+    <legend>背景</legend>
+    <label class="row"><span>背景色</span><input type="color" data-bind="background.color"></label>
+  </fieldset>
+  <fieldset class="detail-particles">
+    <legend>粒子</legend>
+    <label class="row"><span>表示する</span><input type="checkbox" data-bind="particles.enabled"></label>
+    <label class="row"><span>色1</span><input type="color" data-bind="particles.colors.0"></label>
+    <label class="row"><span>色2</span><input type="color" data-bind="particles.colors.1"></label>
+    <label class="row"><span>数(密度)</span><input type="range" min="0" max="400" step="5" data-bind="particles.count"><span class="value"></span></label>
+    <label class="row"><span>点の大きさ</span><input type="range" min="0.5" max="8" step="0.1" data-bind="particles.size"><span class="value"></span></label>
+    <label class="row"><span>速さ</span><input type="range" min="0" max="3" step="0.05" data-bind="particles.speed"><span class="value"></span></label>
+    <label class="row"><span>点の不透明度</span><input type="range" min="0.05" max="1" step="0.05" data-bind="particles.opacity"><span class="value"></span></label>
+    <label class="row"><span>線を引く</span><input type="checkbox" data-bind="particles.link_enabled"></label>
+    <label class="row"><span>線の色</span><input type="color" data-bind="particles.link_color"></label>
+    <label class="row"><span>線の太さ</span><input type="range" min="0.1" max="4" step="0.1" data-bind="particles.link_width"><span class="value"></span></label>
+    <label class="row"><span>線を結ぶ距離</span><input type="range" min="20" max="300" step="5" data-bind="particles.link_distance"><span class="value"></span></label>
+    <label class="row"><span>線の不透明度</span><input type="range" min="0.05" max="1" step="0.05" data-bind="particles.link_opacity"><span class="value"></span></label>
+    <label class="row"><span>マウスに反応</span><input type="checkbox" data-bind="particles.mouse_reaction"></label>
+  </fieldset>
+  <fieldset class="link-particles" hidden>
+    <legend>左右パーティクル</legend>
+    <label class="row"><span>種類</span><select data-bind="link_particles.side_mode">
+      <option value="flame">炎</option><option value="firework">花火</option>
+    </select></label>
+    <label class="row"><span>表示する</span><input type="checkbox" data-bind="link_particles.fire_enabled"></label>
+    <div class="flame-controls">
+    <label class="row"><span>発生量</span><input type="range" min="0" max="100" step="1" data-bind="link_particles.fire_frequency"><span class="value"></span></label>
+    <label class="row"><span>炎の大きさ</span><input type="range" min="0.1" max="5" step="0.1" data-bind="link_particles.fire_scale"><span class="value"></span></label>
+    <label class="row"><span>炎の高さ</span><input type="range" min="20" max="500" step="5" data-bind="link_particles.fire_life"><span class="value"></span></label>
+    <label class="row"><span>上昇速度</span><input type="range" min="0" max="1" step="0.01" data-bind="link_particles.fire_acceleration"><span class="value"></span></label>
+    <label class="row"><span>炎の色相</span><input type="range" min="0" max="360" step="1" data-bind="link_particles.fire_hue"><span class="value"></span></label>
+    <label class="row"><span>色の幅</span><input type="range" min="0" max="180" step="1" data-bind="link_particles.fire_hue_variance"><span class="value"></span></label>
+    </div>
+    <div class="firework-controls" hidden>
+    <label class="row"><span>火花数</span><input type="range" min="1" max="40" step="1" data-bind="link_particles.firework_frequency"><span class="value"></span></label>
+    <label class="row"><span>左の横位置</span><input type="range" min="0" max="1920" step="10" data-bind="link_particles.firework_left_x"><span class="value"></span></label>
+    <label class="row"><span>右の横位置</span><input type="range" min="0" max="1920" step="10" data-bind="link_particles.firework_right_x"><span class="value"></span></label>
+    <label class="row"><span>爆発する高さ</span><input type="range" min="0" max="1080" step="10" data-bind="link_particles.firework_y"><span class="value"></span></label>
+    <label class="row"><span>位置のばらつき</span><input type="range" min="0" max="300" step="5" data-bind="link_particles.firework_position_variance"><span class="value"></span></label>
+    <label class="row"><span>飛ぶ方向</span><input type="range" min="0" max="360" step="1" data-bind="link_particles.firework_direction"><span class="value"></span></label>
+    <label class="row"><span>破裂の勢い</span><input type="range" min="0.5" max="15" step="0.1" data-bind="link_particles.firework_speed"><span class="value"></span></label>
+    <label class="row"><span>勢いのばらつき</span><input type="range" min="0" max="10" step="0.1" data-bind="link_particles.firework_speed_variance"><span class="value"></span></label>
+    <label class="row"><span>広がり</span><input type="range" min="30" max="360" step="5" data-bind="link_particles.firework_spread"><span class="value"></span></label>
+    <label class="row"><span>重力</span><input type="range" min="0" max="1" step="0.005" data-bind="link_particles.firework_gravity"><span class="value"></span></label>
+    <label class="row"><span>重力の方向</span><input type="range" min="0" max="360" step="1" data-bind="link_particles.firework_gravity_direction"><span class="value"></span></label>
+    <label class="row"><span>空気抵抗</span><input type="range" min="0" max="0.2" step="0.001" data-bind="link_particles.firework_friction"><span class="value"></span></label>
+    <label class="row"><span>余韻</span><input type="range" min="20" max="300" step="5" data-bind="link_particles.firework_life"><span class="value"></span></label>
+    <label class="row"><span>火花の大きさ</span><input type="range" min="0.05" max="2" step="0.05" data-bind="link_particles.firework_scale"><span class="value"></span></label>
+    <label class="row"><span>火花の不透明度</span><input type="range" min="0.05" max="1" step="0.05" data-bind="link_particles.firework_alpha"><span class="value"></span></label>
+    <label class="row"><span>花火の色相</span><input type="range" min="0" max="360" step="1" data-bind="link_particles.fire_hue"><span class="value"></span></label>
+    <label class="row"><span>色の幅</span><input type="range" min="0" max="180" step="1" data-bind="link_particles.fire_hue_variance"><span class="value"></span></label>
+    </div>
+  </fieldset>
+  <fieldset class="link-particles" hidden>
+    <legend>雪パーティクル</legend>
+    <label class="row"><span>表示する</span><input type="checkbox" data-bind="link_particles.snow_enabled"></label>
+    <label class="row"><span>発生量</span><input type="range" min="0" max="100" step="1" data-bind="link_particles.snow_frequency"><span class="value"></span></label>
+    <label class="row"><span>雪の大きさ</span><input type="range" min="0.02" max="1" step="0.01" data-bind="link_particles.snow_scale"><span class="value"></span></label>
+    <label class="row"><span>大きさのばらつき</span><input type="range" min="0" max="1" step="0.01" data-bind="link_particles.snow_scale_variance"><span class="value"></span></label>
+    <label class="row"><span>落下速度</span><input type="range" min="0" max="5" step="0.1" data-bind="link_particles.snow_speed"><span class="value"></span></label>
+    <label class="row"><span>降る方向の幅</span><input type="range" min="0" max="180" step="1" data-bind="link_particles.snow_direction_variance"><span class="value"></span></label>
+    <label class="row"><span>不透明度</span><input type="range" min="0" max="1" step="0.01" data-bind="link_particles.snow_alpha"><span class="value"></span></label>
+  </fieldset>
+  <fieldset>
+    <legend>アイコンの揺れ</legend>
+    <label class="row"><span>揺らす</span><input type="checkbox" data-bind="icon.wave_enabled"></label>
+    <label class="row"><span>揺れ幅</span><input type="range" min="0" max="20" step="0.5" data-bind="icon.wave_amplitude"><span class="value"></span></label>
+    <label class="row"><span>波の細かさ</span><input type="range" min="0.005" max="0.3" step="0.005" data-bind="icon.wave_frequency"><span class="value"></span></label>
+    <label class="row"><span>揺れの速さ</span><input type="range" min="0" max="0.3" step="0.005" data-bind="icon.wave_speed"><span class="value"></span></label>
+    <label class="row"><span>セピア</span><input type="checkbox" data-bind="icon.sepia"></label>
+    <label class="row"><span>大きさ</span><input type="range" min="120" max="700" step="10" data-bind="icon.size"><span class="value"></span></label>
+  </fieldset>
+  <fieldset>
+    <legend>ビネット(縁の暗さ)</legend>
+    <label class="row"><span>かける</span><input type="checkbox" data-bind="vignette.enabled"></label>
+    <label class="row"><span>色</span><input type="color" data-bind="vignette.color"></label>
+    <label class="row"><span>透明な内側%</span><input type="range" min="0" max="90" step="1" data-bind="vignette.inner"><span class="value"></span></label>
+    <label class="row"><span>塗り切る%</span><input type="range" min="10" max="100" step="1" data-bind="vignette.outer"><span class="value"></span></label>
+  </fieldset>
+  <fieldset>
+    <legend>文字(全体)</legend>
+    <label class="row"><span>フォント</span><select data-bind="font.family" data-font-select></select></label>
+    <label class="row"><span>自由入力</span><input type="text" data-bind="font.family"></label>
+    <label class="row"><span>基本サイズ</span><input type="range" min="10" max="32" step="1" data-bind="font.base_size"><span class="value"></span></label>
+    <label class="row"><span>文字色</span><input type="color" data-bind="font.color"></label>
+  </fieldset>
+  <fieldset id="design-element" hidden>
+    <legend id="design-element-name">要素</legend>
+    <label class="row"><span>フォント</span><select data-element="family" data-font-select></select></label>
+    <label class="row"><span>サイズ</span><input type="range" min="8" max="90" step="1" data-element="size"><span class="value"></span></label>
+    <label class="row"><span>色</span><input type="color" data-element="color"></label>
+    <label class="row"><span>太さ</span><select data-element="weight">
+      <option value="400">標準</option><option value="700">太字</option><option value="900">極太</option>
+    </select></label>
+    <button id="design-close-element" style="font-size:11px;padding:3px 8px">閉じる</button>
+  </fieldset>
+  <button id="design-save">保存する</button>
+  <div id="design-status"></div>
+</div>
+
+<script id="design-editor-script">
+(function () {
+  const PAGE_KIND = {{PAGE_KIND_JSON}};
+  const FONT_CHOICES = [
+    ['"Noto Serif JP", serif', 'Noto Serif JP (明朝)'],
+    ['"Noto Sans JP", sans-serif', 'Noto Sans JP (ゴシック)'],
+    ['"Yu Gothic UI", "Meiryo", sans-serif', '游ゴシック / メイリオ'],
+    ['"Yu Mincho", "MS Mincho", serif', '游明朝'],
+    ['"MS Gothic", monospace', 'MSゴシック(等幅)'],
+    ['"Segoe UI", sans-serif', 'Segoe UI'],
+    ['Georgia, serif', 'Georgia'],
+    ['"Courier New", monospace', 'Courier New'],
+  ];
+  const SELECTORS = {{SELECTORS_JSON}};
+  let design = {{DESIGN_JSON}};
+  let currentElement = null;
+
+  const getPath = (obj, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), obj);
+  const setPath = (obj, path, value) => {
+    const keys = path.split('.');
+    const last = keys.pop();
+    keys.reduce((a, k) => a[k], obj)[last] = value;
+  };
+  const hexToRgb = hex => {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex || '').trim());
+    return m ? `${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)}` : '255,255,255';
+  };
+
+  function fillFontSelects() {
+    document.querySelectorAll('#design-panel select[data-font-select]').forEach(select => {
+      if (select.options.length) return;
+      if (select.dataset.element) select.add(new Option('全体と同じ', ''));
+      FONT_CHOICES.forEach(([value, label]) => select.add(new Option(label, value)));
+    });
+  }
+
+  function installRangeNumberInputs() {
+    document.querySelectorAll('#design-panel input[type=range]').forEach(range => {
+      const oldValue = range.parentElement.querySelector('.value');
+      if (!oldValue || oldValue.tagName === 'INPUT') return;
+      const number = document.createElement('input');
+      number.type = 'number';
+      number.className = 'value range-number';
+      number.min = range.min;
+      number.max = range.max;
+      number.step = range.step || '1';
+      number.value = range.value;
+      number.addEventListener('input', () => {
+        if (number.value === '') return;
+        range.value = number.value;
+        range.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      number.addEventListener('change', () => {
+        if (number.value === '') number.value = range.value;
+        range.value = number.value;
+        range.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      oldValue.replaceWith(number);
+    });
+  }
+
+  function buildCss() {
+    const font = design.font;
+    const rules = [
+      `body{background-color:${design.background.color}!important;font-family:${font.family}!important;font-size:${font.base_size}px!important;color:${font.color}!important;}`
+    ];
+    Object.entries(design.elements).forEach(([name, element]) => {
+      const selector = SELECTORS[name];
+      if (!selector) return;
+      const parts = [
+        `font-size:${element.size}px!important`,
+        `color:${element.color}!important`,
+        `font-weight:${element.weight || '400'}!important`,
+      ];
+      if (element.family) parts.push(`font-family:${element.family}!important`);
+      rules.push(`${selector}{${parts.join(';')};}`);
+    });
+    const v = design.vignette;
+    rules.push(v.enabled
+      ? `.background-circle{background:radial-gradient(circle at center,transparent 0%,transparent ${v.inner}%,${v.color} ${v.outer}%,${v.color} 100%)!important;}`
+      : '.background-circle{background:none!important;}');
+    const icon = design.icon;
+    rules.push(`.image-container{width:${icon.size}px!important;height:${icon.size}px!important;}`);
+    rules.push(`.foreground-image{width:${icon.size}px!important;filter:sepia(${icon.sepia ? 100 : 0}%)!important;}`);
+    // テンプレートが作る揺れキャンバスは隠し、こちらの設定で描いたものを見せる
+    rules.push('.wave-canvas{display:none!important;}');
+    rules.push(`.design-wave-canvas{position:absolute;z-index:2;border-radius:50%;top:1px;left:2px;` +
+      `width:${icon.size - 5}px;height:${icon.size - 5}px;filter:sepia(${icon.sepia ? 100 : 0}%);}`);
+    return rules.join('\n');
+  }
+
+  function applyCss() {
+    let style = document.getElementById('special-user-design');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'special-user-design';
+      document.head.appendChild(style);
+    }
+    style.textContent = buildCss();
+  }
+
+  /* 個別ページは従来どおり編集用キャンバスを使う。
+     リンク一覧は実物の #myCanvas をそのまま使い、別キャンバスへ置換しない。 */
+  const original = document.querySelector('.particles-background');
+  const legacyCanvas = document.getElementById('myCanvas');
+  const canvas = original ? original.cloneNode(false) : legacyCanvas;
+  const usesLegacyCanvas = !original && !!legacyCanvas;
+  if (original) {
+    canvas.classList.add('particles-background');
+    original.parentNode.insertBefore(canvas, original);
+    original.remove();
+  }
+  const ctx = canvas ? canvas.getContext('2d') : null;
+  const mouse = { x: -9999, y: -9999 };
+  let points = [];
+  // リンク一覧を開いただけでは、元のParticleJS描画へ一切介入しない。
+  let particleEditorActive = !usesLegacyCanvas;
+
+  function fireConfig(x) {
+    const p = design.link_particles;
+    const fireworks = p.side_mode === 'firework';
+    return {
+      bgColor:"#00000", width:1920, height:1080,
+      emitFrequency:p.fire_enabled ? (fireworks ? p.firework_frequency : p.fire_frequency) : 0,
+      startX:x, startXVariance:fireworks ? p.firework_position_variance : 0,
+      startY:fireworks ? p.firework_y : 800,
+      startYVariance:fireworks ? p.firework_position_variance : 0,
+      initialDirection:fireworks ? p.firework_direction : 90,
+      initialDirectionVariance:fireworks ? p.firework_spread : 360,
+      initialSpeed:fireworks ? p.firework_speed : 0.2,
+      initialSpeedVariance:fireworks ? p.firework_speed_variance : 0,
+      friction:fireworks ? String(p.firework_friction) : "0.063",
+      accelerationSpeed:fireworks ? p.firework_gravity : p.fire_acceleration,
+      accelerationDirection:fireworks ? p.firework_gravity_direction : 270,
+      startScale:fireworks ? p.firework_scale : p.fire_scale,
+      startScaleVariance:fireworks ? 0.35 : 0,
+      finishScale:0, finishScaleVariance:0.31,
+      lifeSpan:fireworks ? p.firework_life : p.fire_life,
+      lifeSpanVariance:fireworks ? 30 : 7,
+      startAlpha:fireworks ? p.firework_alpha : 1,
+      startAlphaVariance:"0", finishAlpha:0, finishAlphaVariance:1,
+      shapeIdList:["blur_circle"],
+      startColor:{hue:String(p.fire_hue),hueVariance:String(p.fire_hue_variance),
+        saturation:"91",saturationVariance:15,luminance:"56",luminanceVariance:"16"},
+      blendMode:true,alphaCurveType:fireworks ? "0" : "1",VERSION:"1.0.0"
+    };
+  }
+
+  function snowConfig() {
+    const p = design.link_particles;
+    return {
+      bgColor:"#00000",width:1920,height:1080,
+      emitFrequency:p.snow_enabled ? p.snow_frequency : 0,
+      startX:960,startXVariance:1920,startY:-8,startYVariance:0,
+      initialDirection:90,initialDirectionVariance:p.snow_direction_variance,
+      initialSpeed:p.snow_speed,initialSpeedVariance:0.3,
+      friction:0,accelerationSpeed:0,accelerationDirection:81.6,
+      startScale:p.snow_scale,startScaleVariance:p.snow_scale_variance,
+      finishScale:p.snow_scale,finishScaleVariance:"0",
+      lifeSpan:1000,lifeSpanVariance:"0",
+      startAlpha:String(p.snow_alpha),startAlphaVariance:"1",
+      finishAlpha:"1",finishAlphaVariance:"0",
+      shapeIdList:["blur_circle"],
+      startColor:{hue:"0",hueVariance:"0",saturation:"0",
+        saturationVariance:0,luminance:"100",luminanceVariance:"47"},
+      blendMode:true,alphaCurveType:"0",VERSION:"1.0.0"
+    };
+  }
+
+  function applyLinkParticles() {
+    if (PAGE_KIND !== 'link') return;
+    if (!window.particleSystem1 || !window.particleSystem2 || !window.snowParticleSystem) return;
+    // importFromJson は既に飛んでいる粒子を残すため、位置変更を即時に見せるには消去が必要。
+    window.particleSystem1.clear();
+    window.particleSystem2.clear();
+    window.particleSystem1.importFromJson(
+      fireConfig(design.link_particles.side_mode === 'firework'
+        ? design.link_particles.firework_left_x : 200)
+    );
+    window.particleSystem2.importFromJson(
+      fireConfig(design.link_particles.side_mode === 'firework'
+        ? design.link_particles.firework_right_x : 1720)
+    );
+    window.snowParticleSystem.clear();
+    window.snowParticleSystem.importFromJson(snowConfig());
+  }
+
+  function resize() {
+    if (!canvas || (usesLegacyCanvas && !particleEditorActive)) return;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+  }
+  function build() {
+    points = [];
+    for (let i = 0; i < Math.round(design.particles.count); i += 1) {
+      points.push({
+        x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+        vx: Math.random() - 0.5, vy: Math.random() - 0.5,
+        // 大きさは描画時に design から計算する。ここで確定させるとスライダーが効かない
+        scale: 0.6 + Math.random() * 0.8,
+      });
+    }
+  }
+  function draw() {
+    if (!canvas || !ctx) return;
+    if (usesLegacyCanvas && !particleEditorActive) {
+      requestAnimationFrame(draw);
+      return;
+    }
+    const p = design.particles;
+    ctx.fillStyle = design.background.color;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!p.enabled) { requestAnimationFrame(draw); return; }
+    if (points.length !== Math.round(p.count)) build();
+    points.forEach(point => {
+      point.x += point.vx * p.speed;
+      point.y += point.vy * p.speed;
+      if (point.x < 0 || point.x > canvas.width) point.vx *= -1;
+      if (point.y < 0 || point.y > canvas.height) point.vy *= -1;
+      if (p.mouse_reaction) {
+        const dx = point.x - mouse.x, dy = point.y - mouse.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < 140 && distance > 0.01) {
+          point.vx += dx / distance * 0.008;
+          point.vy += dy / distance * 0.008;
+        }
+      }
+    });
+    if (p.link_enabled) {
+      ctx.lineWidth = p.link_width;
+      for (let i = 0; i < points.length; i += 1) {
+        for (let j = i + 1; j < points.length; j += 1) {
+          const dx = points[i].x - points[j].x, dy = points[i].y - points[j].y;
+          const distance = Math.hypot(dx, dy);
+          if (distance < p.link_distance) {
+            ctx.strokeStyle = `rgba(${hexToRgb(p.link_color)},${p.link_opacity * (1 - distance / p.link_distance)})`;
+            ctx.beginPath();
+            ctx.moveTo(points[i].x, points[i].y);
+            ctx.lineTo(points[j].x, points[j].y);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+    points.forEach((point, index) => {
+      const rgb = hexToRgb(p.colors[index % p.colors.length]);
+      const radius = Math.max(0.1, p.size * point.scale);
+      ctx.fillStyle = `rgba(${rgb},0.12)`;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius * 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(${rgb},${p.opacity})`;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    requestAnimationFrame(draw);
+  }
+  window.addEventListener('resize', () => { resize(); build(); });
+  window.addEventListener('pointermove', event => { mouse.x = event.clientX; mouse.y = event.clientY; });
+
+  /* アイコンの揺れ。テンプレート側のキャンバスはCSSで隠し、設定値で描き直す。 */
+  function setupIconWave() {
+    const container = document.querySelector('.image-container');
+    const image = document.querySelector('.foreground-image');
+    if (!container || !image) return;
+    let waveCanvas = container.querySelector('.design-wave-canvas');
+    if (!waveCanvas) {
+      waveCanvas = document.createElement('canvas');
+      waveCanvas.className = 'design-wave-canvas';
+      container.appendChild(waveCanvas);
+    }
+    const waveCtx = waveCanvas.getContext('2d');
+    // crossOrigin を付けるとニコニコのCDNで読み込みに失敗してアイコンが消える
+    const source = new Image();
+    source.src = image.src;
+    let offset = 10;
+    source.onload = () => {
+      const size = 150;
+      waveCanvas.width = size;
+      waveCanvas.height = size;
+      const dx = (size - source.width) / 2;
+      const dy = (size - source.height) / 2;
+      (function animate() {
+        const icon = design.icon;
+        waveCtx.clearRect(0, 0, size, size);
+        if (icon.wave_enabled) offset += icon.wave_speed;
+        for (let y = 0; y < source.height; y += 1) {
+          const shift = icon.wave_enabled
+            ? icon.wave_amplitude * Math.sin(y * icon.wave_frequency + offset)
+            : 0;
+          waveCtx.drawImage(source, 0, y, source.width, 1, dx + shift, dy + y, source.width, 1);
+        }
+        requestAnimationFrame(animate);
+      })();
+    };
+  }
+
+  function injectGears() {
+    Object.entries(SELECTORS).forEach(([name, selector]) => {
+      let target = null;
+      try { target = document.querySelector(selector); } catch (error) { target = null; }
+      if (!target) return;
+      const button = document.createElement('button');
+      button.className = 'design-gear';
+      button.dataset.gear = name;
+      button.textContent = '⚙';
+      button.title = (design.elements[name] || {}).label || name;
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        openElement(name);
+      });
+      target.appendChild(button);
+    });
+  }
+
+  function openElement(name) {
+    currentElement = name;
+    document.querySelectorAll('.design-gear').forEach(g => g.classList.toggle('active', g.dataset.gear === name));
+    document.getElementById('design-element').hidden = false;
+    document.getElementById('design-element-name').textContent = design.elements[name].label || name;
+    sync();
+  }
+  function closeElement() {
+    currentElement = null;
+    document.querySelectorAll('.design-gear').forEach(g => g.classList.remove('active'));
+    document.getElementById('design-element').hidden = true;
+  }
+
+  function sync() {
+    document.querySelectorAll('#design-panel [data-bind]').forEach(input => {
+      const value = getPath(design, input.dataset.bind);
+      if (input.type === 'checkbox') input.checked = !!value;
+      else if (document.activeElement !== input) input.value = value;
+      const label = input.parentElement.querySelector('.value');
+      if (label && input.type === 'range') {
+        if (label.tagName === 'INPUT' && document.activeElement !== label) label.value = value;
+        else if (label.tagName !== 'INPUT') label.textContent = value;
+      }
+    });
+    if (currentElement) {
+      const element = design.elements[currentElement];
+      document.querySelectorAll('#design-panel [data-element]').forEach(input => {
+        const value = element[input.dataset.element];
+        if (document.activeElement !== input) input.value = value == null ? '' : value;
+        const label = input.parentElement.querySelector('.value');
+        if (label && input.type === 'range') {
+          if (label.tagName === 'INPUT' && document.activeElement !== label) label.value = value;
+          else if (label.tagName !== 'INPUT') label.textContent = value;
+        }
+      });
+    }
+    const fireworks = PAGE_KIND === 'link' && design.link_particles.side_mode === 'firework';
+    document.querySelectorAll('.flame-controls').forEach(element => element.hidden = fireworks);
+    document.querySelectorAll('.firework-controls').forEach(element => element.hidden = !fireworks);
+  }
+
+  function bind() {
+    document.querySelectorAll('#design-panel [data-bind]').forEach(input => {
+      const apply = () => {
+        let value;
+        if (input.type === 'checkbox') value = input.checked;
+        else if (input.type === 'range') value = parseFloat(input.value);
+        else value = input.value;
+        setPath(design, input.dataset.bind, value);
+        if (input.dataset.bind.startsWith('link_particles.')) {
+          applyLinkParticles();
+        }
+        if (
+          usesLegacyCanvas &&
+          input.dataset.bind.startsWith('particles.')
+        ) {
+          particleEditorActive = true;
+          // 同じ #myCanvas を編集用描画へ引き継ぐ。元のtickとの二重描画を止める。
+          if (window.createjs && createjs.Ticker) {
+            createjs.Ticker.removeAllEventListeners('tick');
+          }
+          resize();
+          build();
+        }
+        sync(); applyCss();
+      };
+      input.addEventListener('input', apply);
+      input.addEventListener('change', apply);
+    });
+    document.querySelectorAll('#design-panel [data-element]').forEach(input => {
+      const apply = () => {
+        if (!currentElement) return;
+        design.elements[currentElement][input.dataset.element] =
+          input.type === 'range' ? parseFloat(input.value) : input.value;
+        sync(); applyCss();
+      };
+      input.addEventListener('input', apply);
+      input.addEventListener('change', apply);
+    });
+    document.getElementById('design-close-element').addEventListener('click', closeElement);
+    document.getElementById('design-save').addEventListener('click', save);
+  }
+
+  async function save() {
+    const status = document.getElementById('design-status');
+    status.style.color = '#c9c8d0';
+    status.textContent = '保存中...';
+    try {
+      const response = await fetch('/api/design', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(design),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || ('HTTP ' + response.status));
+      status.style.color = '#7fd3a1';
+      status.textContent = '保存しました (' + new Date().toLocaleTimeString() + ')';
+    } catch (error) {
+      status.style.color = '#ff8080';
+      status.textContent = '保存失敗: ' + error.message;
+    }
+  }
+
+  fillFontSelects();
+  installRangeNumberInputs();
+  document.querySelectorAll('.detail-particles').forEach(
+    element => element.hidden = PAGE_KIND === 'link'
+  );
+  document.querySelectorAll('.link-particles').forEach(
+    element => element.hidden = PAGE_KIND !== 'link'
+  );
+  bind();
+  injectGears();
+  sync();
+  // 元のリンクHTMLは毎回「炎」でParticleJSを初期化する。
+  // 保存済みの種類・位置・重力などを、編集画面を開いた直後にも上書き適用する。
+  applyLinkParticles();
+  applyCss();
+  if (!usesLegacyCanvas) {
+    resize();
+    build();
+  }
+  draw();
+  window.addEventListener('load', setupIconWave);
+  setupIconWave();
+})();
+</script>

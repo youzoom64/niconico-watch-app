@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>スペシャルユーザーGUI概念メモ</title>
+  <style>
+    body {
+      font-family: "Meiryo", "Yu Gothic", sans-serif;
+      line-height: 1.7;
+      margin: 24px;
+      color: #1f2937;
+      background: #f8fafc;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #d7dee8;
+      padding: 24px;
+    }
+    h1, h2 {
+      margin: 0 0 12px;
+    }
+    h2 {
+      margin-top: 28px;
+      border-bottom: 1px solid #d7dee8;
+      padding-bottom: 4px;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .node {
+      border: 1px solid #cbd5e1;
+      padding: 12px;
+      background: #f8fafc;
+    }
+    .node strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #0f172a;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      background: #fff;
+    }
+    th, td {
+      border: 1px solid #d7dee8;
+      padding: 8px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #eef2f7;
+      white-space: nowrap;
+    }
+    code {
+      background: #eef2f7;
+      padding: 1px 4px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>スペシャルユーザーGUI概念メモ</h1>
+  <p>
+    旧 <code>ncv_special_monitor</code> のGUIから、新しい監視アプリへ引き継ぐ画面階層と操作概念を固定する。
+    これは実装前の設計メモであり、まず「どの画面から何をダブルクリックして、どの編集画面へ進むか」を明確にする。
+  </p>
+
+  <h2>画面遷移</h2>
+  <div class="flow">
+    <div class="node">
+      <strong>1. スペシャルユーザーメイン画面</strong>
+      登録済みスペシャルユーザーを一覧表示する。
+      ユーザー行をダブルクリックすると、スペシャルユーザー編集画面を開く。
+    </div>
+    <div class="node">
+      <strong>2. スペシャルユーザー編集画面</strong>
+      対象ユーザーの基本情報、AI分析、既定応答、スペシャルトリガー、配信者一覧を編集する。
+      配信者一覧の行をダブルクリックすると、配信者編集画面を開く。
+    </div>
+    <div class="node">
+      <strong>3. 配信者編集画面</strong>
+      そのスペシャルユーザーに紐づく特定配信者向けの設定を編集する。
+      配信者ごとのトリガー一覧を持ち、トリガー行をダブルクリックするとトリガー編集画面を開く。
+    </div>
+    <div class="node">
+      <strong>4. トリガー編集画面</strong>
+      トリガー名、キーワード、応答タイプ、定型メッセージ、AIプロンプト、反応回数、遅延などを編集する。
+    </div>
+  </div>
+
+  <h2>階層構造</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>階層</th>
+        <th>主な対象</th>
+        <th>主な操作</th>
+        <th>次に開く画面</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>スペシャルユーザー一覧</td>
+        <td>スペシャルユーザーID、表示名、AIモデル、配信者数、スペシャルトリガー数</td>
+        <td>追加、編集、削除、配信者管理、シリーズ管理、行ダブルクリック</td>
+        <td>スペシャルユーザー編集</td>
+      </tr>
+      <tr>
+        <td>スペシャルユーザー編集</td>
+        <td>ユーザー基本情報、184別名ID、AI分析、既定メッセージ応答、スペシャルトリガー、配信者一覧</td>
+        <td>保存、キャンセル、配信者追加/削除、一括有効/無効、配信者行ダブルクリック</td>
+        <td>配信者編集</td>
+      </tr>
+      <tr>
+        <td>配信者編集</td>
+        <td>配信者ID、配信者名、有効状態、この配信者向けのAI分析/応答設定、トリガー一覧</td>
+        <td>保存、キャンセル、トリガー追加/削除/シリーズ追加、一括有効/無効、トリガー行ダブルクリック</td>
+        <td>トリガー編集</td>
+      </tr>
+      <tr>
+        <td>トリガー編集</td>
+        <td>トリガー名、有効状態、キーワード、応答タイプ、定型メッセージ、AIプロンプト、反応回数、遅延</td>
+        <td>保存、キャンセル</td>
+        <td>なし</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>重要な概念</h2>
+  <ul>
+    <li>スペシャルユーザーは監視対象のコメント投稿者である。</li>
+    <li>スペシャルユーザーには、出入りする配信者を複数紐づけられる。</li>
+    <li>配信者ごとに、その配信内でだけ有効な応答・AI・トリガー設定を持てる。</li>
+    <li>トリガーはキーワード条件に一致した時だけ発動する個別ルールである。</li>
+    <li>スペシャルトリガーは通常設定より優先されるユーザー直下の特別ルールである。</li>
+    <li>各階層の一覧は、行ダブルクリックで下位または詳細編集画面へ入る。</li>
+  </ul>
+
+  <h2>新アプリ側での対応方針</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>旧GUI概念</th>
+        <th>新PyQtアプリでの予定</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>スペシャルユーザー一覧</td>
+        <td>現在の「スペシャルユーザー」タブを拡張する。</td>
+      </tr>
+      <tr>
+        <td>スペシャルユーザー編集</td>
+        <td>ダブルクリックでサブウィンドウを開き、基本情報、既定アクション、トリガーワード、配信者一覧を編集する。</td>
+      </tr>
+      <tr>
+        <td>配信者一覧/配信者編集</td>
+        <td>スペシャルユーザーに紐づいた放送者IDを一覧化し、配信者ごとの設定画面を追加する。</td>
+      </tr>
+      <tr>
+        <td>配信者トリガー</td>
+        <td>配信者ごとのトリガーワードとアクションを持つ。トリガー行ダブルクリックで編集する。</td>
+      </tr>
+      <tr>
+        <td>投稿/外部アプリ実行</td>
+        <td>まず設定保存だけ実装し、実行処理は後で安全に接続する。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>ニコニコ投稿セッション取得メモ</h2>
+  <p>
+    通常コメント投稿は、Chrome拡張「ニコ生コメビュ」v0.3.4 の実装を参考にして、Python側で直接送信できることを確認済み。
+    拡張機能を実行しているのではなく、拡張の通信手順を読み取って <code>nicolive_post.py</code> に移植している。
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>項目</th>
+        <th>内容</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>必要なCookie</td>
+        <td><code>user_session</code></td>
+      </tr>
+      <tr>
+        <td>取得元</td>
+        <td>ニコニコにログイン済みのChromeプロファイル。別アカウントで投稿したい場合は、そのアカウントでログインしているChromeプロファイルから取得する。</td>
+      </tr>
+      <tr>
+        <td>保存先DB</td>
+        <td><code>data/tracker.db</code> の <code>niconico_sessions</code> テーブル。</td>
+      </tr>
+      <tr>
+        <td>現在の使用ルール</td>
+        <td><code>nicolive_post.py</code> は <code>updated_at DESC, id DESC</code> で最新の <code>user_session</code> を使う。</td>
+      </tr>
+      <tr>
+        <td>184投稿</td>
+        <td><code>isAnonymous: true</code> を送る。成功時はサーバー応答の <code>postCommentResult.data.chat.mail</code> が <code>184</code>、<code>anonymity</code> が <code>1</code> になる。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>セッションIDの取得手順</h2>
+  <ol>
+    <li>投稿に使いたいアカウントでChromeにログインし、ニコニコにログインしておく。</li>
+    <li>新アプリの「設定」タブを開く。</li>
+    <li><code>ログイン用Chromeを開く</code> を押し、必要ならそのChromeでニコニコログイン状態を確認する。</li>
+    <li><code>ログイン完了後に取得</code> を押す。</li>
+    <li><code>user_session</code> 欄に <code>user_session_...</code> が入ったことを確認する。</li>
+    <li>識別用のアカウント名を入れて保存する。例: <code>応援アカウント</code>、<code>youzoom</code>。</li>
+  </ol>
+
+  <h2>手動で確認する場合</h2>
+  <ol>
+    <li>Chromeで <code>https://www.nicovideo.jp/</code> または対象放送ページを開く。</li>
+    <li>DevToolsを開き、<code>Application</code> タブを開く。</li>
+    <li><code>Storage</code> → <code>Cookies</code> → <code>https://www.nicovideo.jp</code> または <code>https://live.nicovideo.jp</code> を開く。</li>
+    <li>Cookie一覧から <code>user_session</code> を探す。</li>
+    <li>値はアカウントのログイン権限そのものなので、ログや画面に不用意に出さない。</li>
+  </ol>
+
+  <h2>実証済み投稿フロー</h2>
+  <ol>
+    <li>DBから <code>user_session</code> を読む。</li>
+    <li><code>https://live.nicovideo.jp/watch/lv...</code> をCookie付きで取得する。</li>
+    <li>ページ内の <code>embedded-data</code> から認証済み <code>webSocketUrl</code> を読む。</li>
+    <li>WebSocketへ接続し、<code>startWatching</code> を送る。</li>
+    <li><code>messageServer</code> イベントから <code>vposBaseTime</code> を受け取る。</li>
+    <li>現在時刻との差分から <code>vpos</code> を計算する。</li>
+    <li><code>postComment</code> を送る。</li>
+    <li><code>postCommentResult</code> が返れば投稿受付成功。</li>
+  </ol>
+</main>
+</body>
+</html>
